@@ -1095,7 +1095,10 @@ ${strangerNote}`;
                 camIndicator.classList.add('cam-active');
                 // Ab photo bahut kam baar li jaati hai (sirf genuine need pe), isliye resolution/quality
                 // badha di — AI ko ekdam clear image milegi.
-                stream = await navigator.mediaDevices.getUserMedia({ video: { width: 960, height: 720, facingMode: "user" } });
+                stream = await Promise.race([
+    navigator.mediaDevices.getUserMedia({ video: { width: 960, height: 720, facingMode: "user" } }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Camera timeout')), 4000))
+]);
                 video.srcObject = stream;
                 await new Promise(resolve => { video.onloadedmetadata = resolve; video.play(); });
                 await new Promise(r => setTimeout(r, 600)); // auto-focus settle
