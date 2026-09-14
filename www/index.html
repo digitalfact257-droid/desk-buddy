@@ -3194,8 +3194,19 @@ ${strangerNote}`;
                 window.speechSynthesis.onvoiceschanged = () => pickVoice();
             }
 
-            db.ref('buddy/last_offline').once('value').then(async (snap) => {
-                const lastTime = snap.val();
+            (async () => {
+                logActivity('🔎 Debug: Firebase read shuru.', 'system');
+                let lastTime = null;
+                try {
+                    const snap = await Promise.race([
+                        db.ref('buddy/last_offline').once('value'),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
+                    ]);
+                    lastTime = snap.val();
+                    logActivity('🔎 Debug: Firebase read OK.', 'system');
+                } catch (e) {
+                    logActivity('⚠️ Debug: Firebase read FAIL — ' + safeStr(e && e.message), 'error');
+                }
                 let promptText = "Hello bolo. Main abhi online aaya hu.";
                 if (lastTime) {
                     const diffHours = Math.floor((Date.now() - lastTime) / (1000 * 60 * 60));
@@ -3203,10 +3214,12 @@ ${strangerNote}`;
                         promptText = `Main ${diffHours} ghante baad wapas aaya hu. Is dauran mujhe kya miss hua hoga — agar kuch pata nahi toh mujhse puch sakte ho ("Itni der kahan the?"). Photo dekh kar bhi comment karo.`;
                     }
                 }
+                logActivity('🔎 Debug: photo lena shuru.', 'system');
                 const photo = await takeSnapshot();
+                logActivity('🔎 Debug: photo step khatam, AI call ja raha.', 'system');
                 enqueueCall(promptText, { base64Image: photo, isSystemOverride: true });
                 startObservationLoop();
-            });
+            })();
 
             window.addEventListener('beforeunload', () => {
                 db.ref('buddy/last_offline').set(Date.now());
