@@ -1,0 +1,51 @@
+name: Build Android APK
+
+# Ye workflow sirf tab chalta hai jab aap khud "Run workflow" button dabate ho.
+# GitHub ke free servers pe aapka APK banta hai — aapke phone/PC pe kuch install nahi hota.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code checkout karo
+        uses: actions/checkout@v4
+
+      - name: Node.js 20 setup
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Java 17 setup
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Android SDK setup
+        uses: android-actions/setup-android@v3
+
+      - name: Dependencies install karo (Capacitor + plugins)
+        run: npm install
+
+      - name: Android platform add + web files sync
+        run: |
+          npx cap add android
+          npx cap sync
+
+      - name: AndroidManifest me permissions add karo (mic + camera)
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n\n    <application|' "$MANIFEST"
+          echo "---- Manifest permissions ----"
+          grep "uses-permission" "$MANIFEST"
+
+      - name: Debug APK build karo (Gradle)
+        run: cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+
+      - name: APK upload karo (Artifacts me download ke liye)
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-buddy-app-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
