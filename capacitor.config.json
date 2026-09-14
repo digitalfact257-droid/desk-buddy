@@ -1,0 +1,9 @@
+{
+  "appId": "com.aideskbuddy.app",
+  "appName": "AI Desk Buddy",
+  "webDir": "www",
+  "backgroundColor": "#000000",
+  "android": {
+    "allowMixedContent": true
+  }
+}
