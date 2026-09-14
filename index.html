@@ -1,0 +1,3221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Capacitor runtime: native APK me mic/camera plugins deta hai. Browser me harmless. -->
+    <script src="capacitor.js"></script>
+    <title>AI Desk Buddy - JARVIS Edition v2</title>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+    <style>
+        /* ================= CSS: UI & ANIMATIONS ================= */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background-color: #000000; color: white;
+            font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; height: 100vh; overflow: hidden; user-select: none;
+        }
+        #start-screen {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: #000; display: flex; justify-content: center; align-items: center;
+            font-size: 24px; font-weight: bold; color: #00e5ff; cursor: pointer; z-index: 100;
+            text-align: center; padding: 20px;
+        }
+
+        /* Face Container */
+        .face {
+            display: flex; flex-direction: column; align-items: center;
+            margin-bottom: 30px; cursor: pointer; position: relative;
+            animation: idleSway 4.5s ease-in-out infinite;
+            transition: opacity 0.15s ease, filter 0.15s ease;
+        }
+        @keyframes idleSway { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+        /* Brief crossfade blip toggled by JS on every expression change, so switching
+           between faces feels like a soft dissolve instead of an instant snap. */
+        .expr-fade { opacity: 0.5 !important; filter: blur(1px); }
+        .eyes-container { display: flex; gap: 60px; }
+        .eye-wrapper { display: flex; flex-direction: column; align-items: center; }
+
+        /* --- Eyebrows, Eyes, Pupil, Mouth --- */
+        .eyebrow {
+            width: 100px; height: 12px; background-color: #00e5ff; border-radius: 10px; margin-bottom: 15px;
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.5); transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .eye {
+            width: 90px; height: 130px; background-color: #00e5ff; border-radius: 50%; position: relative;
+            box-shadow: 0 0 30px rgba(0, 229, 255, 0.5); transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex; justify-content: center; align-items: center;
+        }
+        .pupil {
+            width: 35px; height: 35px; background-color: #000; border-radius: 50%;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); position: absolute;
+        }
+        .mouth {
+            width: 40px; height: 8px; background-color: #00e5ff; border-radius: 20px; margin-top: 35px;
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.5); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative; cursor: pointer;
+        }
+        /* Visible mouth hai sirf 40x8px — 5-tap gesture reliably karne ke liye hit-area ko
+           invisibly bada kiya (clicks isi asli .mouth element par hi register hote hain). */
+        .mouth::after {
+            content: ''; position: absolute; top: -22px; left: -30px; right: -30px; bottom: -22px;
+        }
+
+        /* --- Expressions --- */
+        .expr-normal .pupil { animation: idleGaze 7s ease-in-out infinite; }
+        @keyframes idleGaze {
+            0%, 100% { transform: translate(0, 0); }
+            20% { transform: translate(4px, -2px); }
+            45% { transform: translate(-3px, 2px); }
+            70% { transform: translate(2px, 3px); }
+        }
+        /* --- Idle-Fun: JS-toggled "look around" nudge (no API, pure client-side) ---
+           !important taaki jis bhi expression/animation me pupil ho, ye usse thodi der ke liye overrule kar de. */
+        .face.look-left .pupil { transform: translate(-14px, 2px) !important; }
+        .face.look-right .pupil { transform: translate(14px, 2px) !important; }
+        .face.look-up .pupil { transform: translate(0, -12px) !important; }
+        .expr-happy .eye { height: 90px; border-radius: 50px 50px 10px 10px; margin-top: 15px; }
+        .expr-happy .eyebrow { transform: translateY(-15px) scaleY(1.2); }
+        .expr-happy .mouth { height: 20px; border-radius: 10px 10px 40px 40px; width: 50px; }
+
+        .expr-angry .left-eye { transform: rotate(-15deg); border-radius: 20px 50px 50px 50px; }
+        .expr-angry .right-eye { transform: rotate(15deg); border-radius: 50px 20px 50px 50px; }
+        .expr-angry .left-eyebrow { transform: rotate(25deg) translateY(15px) translateX(10px); }
+        .expr-angry .right-eyebrow { transform: rotate(-25deg) translateY(15px) translateX(-10px); }
+        .expr-angry .mouth { width: 30px; transform: rotate(-10deg); }
+
+        .expr-sad .eye { height: 100px; border-radius: 10px 10px 50px 50px; margin-top: 10px; }
+        .expr-sad .left-eyebrow { transform: rotate(-20deg) translateY(-5px); }
+        .expr-sad .right-eyebrow { transform: rotate(20deg) translateY(-5px); }
+        .expr-sad .mouth { height: 20px; border-radius: 40px 40px 10px 10px; width: 40px; margin-top: 45px;}
+
+        .expr-thinking .left-eye { transform: rotate(10deg); height: 80px; margin-top: 25px; }
+        .expr-thinking .right-eye { transform: rotate(-10deg); height: 80px; margin-top: 25px; }
+        .expr-thinking .pupil { transform: translate(15px, -20px); }
+        .expr-thinking .left-eyebrow { transform: rotate(15deg) translateY(10px) translateX(15px); }
+        .expr-thinking .right-eyebrow { transform: rotate(-15deg) translateY(10px) translateX(-15px); }
+        .expr-thinking .mouth { transform: translateX(10px); width: 25px; }
+
+        .expr-sleeping .eye { height: 8px; border-radius: 20px; margin-top: 60px; box-shadow: 0 0 10px rgba(0, 229, 255, 0.3); }
+        .expr-sleeping .eyebrow { transform: translateY(35px); opacity: 0.3; }
+        .expr-sleeping .mouth { width: 15px; height: 15px; border-radius: 50%; }
+
+        .expr-surprised .eye { width: 100px; height: 140px; }
+        .expr-surprised .eyebrow { transform: translateY(-30px); }
+        .expr-surprised .mouth { width: 25px; height: 25px; border-radius: 50%; }
+
+        /* --- New expanded expressions (bored, confused, laughing, smirk, shy, annoyed, curious, love, winking, sleepy) --- */
+        .expr-bored .eye { height: 45px; border-radius: 40px 40px 20px 20px; margin-top: 45px; }
+        .expr-bored .eyebrow { transform: translateY(10px); opacity: 0.6; }
+        .expr-bored .pupil { transform: translate(0, 10px); }
+        .expr-bored .mouth { width: 30px; height: 6px; border-radius: 10px; }
+
+        .expr-confused #eyes { transform: rotate(-6deg); }
+        .expr-confused .left-eyebrow { transform: translateY(-10px) rotate(-10deg); }
+        .expr-confused .right-eyebrow { transform: translateY(5px) rotate(15deg); }
+        .expr-confused .left-eye .pupil { transform: translate(-8px, 0); }
+        .expr-confused .right-eye .pupil { transform: translate(8px, 6px); }
+        .expr-confused .mouth { width: 20px; transform: translateX(-6px) rotate(-6deg); }
+
+        .expr-laughing .eye { height: 20px; border-radius: 50px 50px 0 0; margin-top: 55px; }
+        .expr-laughing .eyebrow { transform: translateY(-10px); }
+        .expr-laughing .mouth { width: 55px; height: 30px; border-radius: 10px 10px 50px 50px; margin-top: 20px; animation: laughShake 0.15s infinite alternate; }
+        @keyframes laughShake { 0% { transform: translateY(0); } 100% { transform: translateY(3px); } }
+
+        .expr-smirk .eye { height: 70px; }
+        .expr-smirk .left-eyebrow { transform: translateY(-8px); }
+        .expr-smirk .right-eyebrow { transform: translateY(2px); }
+        .expr-smirk .mouth { width: 34px; height: 14px; border-radius: 30px 8px 30px 8px; transform: translateX(10px) rotate(-8deg); }
+
+        .expr-shy .eye { height: 60px; margin-top: 40px; }
+        .expr-shy .pupil { transform: translateY(15px); }
+        .expr-shy .eyebrow { transform: translateY(8px); }
+        .expr-shy .mouth { width: 20px; height: 20px; border-radius: 50%; margin-top: 30px; }
+        .expr-shy::before, .expr-shy::after {
+            content: ''; position: absolute; width: 30px; height: 18px; background: rgba(255,105,180,0.55);
+            border-radius: 50%; top: 95px; filter: blur(4px); pointer-events: none;
+        }
+        .expr-shy::before { left: -8px; }
+        .expr-shy::after { right: -8px; }
+
+        .expr-annoyed .eyebrow { transform: translateY(8px) scaleY(0.7); }
+        .expr-annoyed .eye { height: 100px; }
+        .expr-annoyed .mouth { width: 35px; height: 6px; border-radius: 10px; transform: rotate(-3deg); }
+
+        .expr-curious #eyes { transform: rotate(5deg); }
+        .expr-curious .left-eyebrow { transform: translateY(-18px); }
+        .expr-curious .pupil { transform: translate(5px, -12px); }
+        .expr-curious .mouth { width: 22px; transform: translateX(5px); }
+
+        .expr-love .pupil { background: transparent; width: 30px; height: 30px; }
+        .expr-love .pupil::before, .expr-love .pupil::after {
+            content: ''; position: absolute; width: 16px; height: 24px; background: #ff2d78; border-radius: 16px 16px 0 0;
+        }
+        .expr-love .pupil::before { left: 15px; transform: rotate(-45deg); transform-origin: 0 100%; }
+        .expr-love .pupil::after { left: 0; transform: rotate(45deg); transform-origin: 100% 100%; }
+        .expr-love .eyebrow { transform: translateY(-10px) scaleY(1.1); }
+        .expr-love .mouth { width: 45px; height: 18px; border-radius: 10px 10px 40px 40px; }
+
+        .expr-winking .left-eye { height: 8px; margin-top: 60px; border-radius: 10px; }
+        .expr-winking .left-eye .pupil { display: none; }
+        .expr-winking .left-eyebrow { transform: translateY(20px); }
+        .expr-winking .mouth { width: 34px; height: 14px; border-radius: 30px 8px 30px 8px; transform: translateX(8px) rotate(-6deg); }
+
+        .expr-sleepy .eye { height: 45px; margin-top: 45px; border-radius: 30px 30px 15px 15px; }
+        .expr-sleepy .eyebrow { transform: translateY(20px); opacity: 0.5; }
+        .expr-sleepy .mouth { width: 18px; height: 18px; border-radius: 50%; margin-top: 25px; }
+
+        /* --- 15 more expressions (excited, dizzy, cool, crying, proud, nervous, sneaky,
+           starstruck, sassy, determined, relaxed, grumpy, zoned, whistling, glitch) --- */
+        .expr-excited .eye { height: 110px; }
+        .expr-excited .pupil { width: 42px; height: 42px; }
+        .expr-excited .eyebrow { transform: translateY(-20px) scaleY(1.3); }
+        .expr-excited .mouth { width: 45px; height: 45px; border-radius: 50%; margin-top: 20px; }
+
+        .expr-dizzy .pupil { animation: dizzySpin 0.6s linear infinite; }
+        @keyframes dizzySpin { 0% { transform: translate(9px, 0) rotate(0deg); } 100% { transform: translate(9px, 0) rotate(360deg); } }
+        .expr-dizzy .mouth { width: 26px; height: 14px; border-radius: 50%; background: transparent; border: 3px solid #00e5ff; box-shadow: none; }
+
+        .expr-cool .eye::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 55%;
+            background: #000; border-radius: 50% 50% 0 0; z-index: 2;
+        }
+        .expr-cool .eyebrow { transform: translateY(-6px); }
+        .expr-cool .mouth { width: 34px; height: 10px; border-radius: 20px 6px 20px 6px; transform: translateX(8px); }
+
+        .expr-crying .eye { height: 90px; border-radius: 10px 10px 50px 50px; margin-top: 20px; }
+        .expr-crying .eyebrow { transform: translateY(-4px) rotate(6deg); }
+        .expr-crying .mouth { width: 22px; height: 14px; border-radius: 30px 30px 8px 8px; margin-top: 40px; }
+        .expr-crying .eye::after {
+            content: ''; position: absolute; bottom: -22px; left: 50%; transform: translateX(-50%);
+            width: 10px; height: 16px; background: #00b7ff; border-radius: 0 50% 50% 50%;
+            animation: tearFall 1.1s ease-in infinite;
+        }
+        @keyframes tearFall { 0% { opacity: 0; transform: translate(-50%, -10px); } 30% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, 25px); } }
+
+        .expr-proud .eyebrow { transform: translateY(-14px); }
+        .expr-proud .eye { margin-top: 5px; }
+        .expr-proud .pupil { transform: translate(0, -8px); }
+        .expr-proud .mouth { width: 48px; height: 16px; border-radius: 10px 10px 30px 30px; }
+
+        .expr-nervous .pupil { animation: nervousShift 0.5s ease-in-out infinite; }
+        @keyframes nervousShift { 0%, 100% { transform: translate(-6px, 0); } 50% { transform: translate(6px, 0); } }
+        .expr-nervous .left-eyebrow { transform: translateY(-4px) rotate(-8deg); }
+        .expr-nervous .right-eyebrow { transform: translateY(6px) rotate(4deg); }
+        .expr-nervous .mouth { width: 26px; height: 8px; border-radius: 10px; transform: rotate(4deg); }
+
+        .expr-sneaky .eye { height: 30px; margin-top: 50px; border-radius: 30px 30px 10px 10px; }
+        .expr-sneaky .left-eyebrow { transform: rotate(-8deg); }
+        .expr-sneaky .right-eyebrow { transform: rotate(8deg); }
+        .expr-sneaky .mouth { width: 40px; height: 10px; border-radius: 30px 4px 30px 4px; transform: translateX(6px) rotate(-6deg); }
+
+        .expr-starstruck .pupil {
+            background: #ffd700; width: 34px; height: 34px;
+            clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+        }
+        .expr-starstruck .eye { height: 100px; }
+        .expr-starstruck .mouth { width: 40px; height: 18px; border-radius: 10px 10px 40px 40px; }
+
+        .expr-sassy .left-eyebrow { transform: translateY(-18px) rotate(-5deg); }
+        .expr-sassy .right-eyebrow { transform: translateY(6px) scaleY(0.6); }
+        .expr-sassy .left-eye { height: 90px; }
+        .expr-sassy .right-eye { height: 40px; }
+        .expr-sassy .mouth { width: 34px; height: 14px; border-radius: 30px 8px 30px 8px; transform: translateX(-10px) rotate(8deg); }
+
+        .expr-determined .left-eyebrow { transform: translateY(10px) rotate(-15deg) translateX(8px); }
+        .expr-determined .right-eyebrow { transform: translateY(10px) rotate(15deg) translateX(-8px); }
+        .expr-determined .eye { height: 60px; margin-top: 35px; }
+        .expr-determined .mouth { width: 45px; height: 6px; border-radius: 6px; }
+
+        .expr-relaxed .eye { height: 35px; margin-top: 48px; border-radius: 40px; }
+        .expr-relaxed .eyebrow { transform: translateY(15px); opacity: 0.7; }
+        .expr-relaxed .mouth { width: 36px; height: 14px; border-radius: 8px 8px 30px 30px; }
+
+        .expr-grumpy .left-eyebrow { transform: translateY(12px) rotate(12deg) translateX(6px); }
+        .expr-grumpy .right-eyebrow { transform: translateY(12px) rotate(-12deg) translateX(-6px); }
+        .expr-grumpy .eye { height: 55px; margin-top: 40px; }
+        .expr-grumpy .mouth { width: 30px; height: 12px; border-radius: 30px 30px 6px 6px; transform: rotate(180deg); margin-top: 30px; }
+
+        .expr-zoned .pupil { animation: zonedDrift 6s ease-in-out infinite; }
+        @keyframes zonedDrift { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(3px, 4px); } }
+        .expr-zoned .eyebrow { opacity: 0.5; }
+        .expr-zoned .mouth { width: 26px; height: 10px; border-radius: 30px; opacity: 0.6; }
+
+        .expr-whistling .eye { height: 20px; border-radius: 50px 50px 0 0; margin-top: 55px; }
+        .expr-whistling .eyebrow { transform: translateY(-8px); }
+        .expr-whistling .mouth { width: 18px; height: 18px; border-radius: 50%; transform: translateX(10px); }
+
+        .expr-glitch .eye, .expr-glitch .eyebrow, .expr-glitch .mouth { animation: glitchShift 0.25s steps(2) infinite; }
+        @keyframes glitchShift { 0% { transform: translate(0, 0); } 25% { transform: translate(3px, -2px); } 50% { transform: translate(-3px, 2px); } 75% { transform: translate(2px, 2px); } 100% { transform: translate(0, 0); } }
+        .expr-glitch .pupil { background: #ff2d78; }
+
+        /* Muted & Camera Activity visuals */
+        .muted-visual { border: 2px dashed #ff0055 !important; box-shadow: 0 0 15px #ff0055 !important; }
+        #cam-indicator { width: 10px; height: 10px; background: #00ff00; border-radius: 50%; position: absolute; top: 20px; right: 20px; opacity: 0; transition: 0.3s; box-shadow: 0 0 10px #00ff00; }
+        .cam-active { opacity: 1 !important; }
+
+        .blink .eye { height: 8px !important; margin-top: 60px !important; border-radius: 10px !important; }
+        .talking-mouth { animation: talk 0.2s infinite alternate !important; }
+        @keyframes talk { 0% { height: 8px; width: 40px; border-radius: 20px; } 100% { height: 35px; width: 30px; border-radius: 40px; } }
+
+        /* UI Controls */
+        #status-text { font-size: 16px; color: #aaa; min-height: 40px; margin-bottom: 6px; text-align: center; max-width: 85%; }
+        #memory-status { font-size: 12px; color: #00e5ff; margin-bottom: 6px; }
+        #relationship-status { font-size: 11px; color: #888; margin-bottom: 16px; }
+        .controls { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+        button { background: none; border: 2px solid #00e5ff; color: #00e5ff; padding: 10px 18px; border-radius: 20px; font-size: 15px; cursor: pointer; transition: 0.3s; }
+        button:hover, button.active { background: #00e5ff; color: #000; }
+        #cam-fix-btn { display: none; border-color: #ffaa00; color: #ffaa00; }
+        #cam-fix-btn:hover { background: #ffaa00; color: #000; }
+
+        /* Hidden elements */
+        #video-feed, #canvas-capture { display: none; }
+
+        /* History panel */
+        #history-overlay {
+            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.85); z-index: 200; justify-content: center; align-items: center;
+        }
+        #history-panel {
+            width: 92%; max-width: 480px; max-height: 78vh; background: #0a0a0a;
+            border: 2px solid #00e5ff; border-radius: 14px; box-shadow: 0 0 25px rgba(0,229,255,0.3);
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+        #history-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 14px; border-bottom: 1px solid rgba(0,229,255,0.3);
+            font-size: 15px; font-weight: bold; color: #00e5ff;
+        }
+        #history-header button {
+            font-size: 11px; padding: 5px 10px; border-radius: 12px; margin-left: 6px;
+        }
+        #history-close-btn { border-color: #ff0055; color: #ff0055; }
+        #history-close-btn:hover { background: #ff0055; color: #000; }
+        #history-list { overflow-y: auto; padding: 10px 14px; flex: 1; }
+        .history-item {
+            font-size: 12.5px; color: #ddd; padding: 7px 0; border-bottom: 1px solid #1a1a1a;
+            line-height: 1.4; text-align: left;
+        }
+        .history-time { color: #00e5ff; font-weight: bold; margin-right: 6px; }
+        .history-error { color: #ff5577; }
+        .history-reply { color: #7fffd4; }
+        .history-user { color: #ffd166; }
+        .history-task { color: #ff9f4d; }
+        .history-memory { color: #b39dff; }
+        .history-mood { color: #6ec6ff; }
+        .history-empty { color: #666; text-align: center; padding: 20px 0; font-size: 13px; }
+        #history-footer {
+            padding: 7px 14px; border-top: 1px solid rgba(0,229,255,0.25);
+            font-size: 11px; color: #666; text-align: left;
+        }
+
+        /* Mute countdown text */
+        #mute-status { font-size: 12px; color: #ff5577; margin-bottom: 8px; min-height: 15px; }
+
+        /* --- Tic-Tac-Toe Game Overlay --- */
+        #game-overlay {
+            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.92); z-index: 300; justify-content: center; align-items: center;
+        }
+        #game-panel {
+            width: 92%; max-width: 380px; background: #0a0a0a;
+            border: 2px solid #00e5ff; border-radius: 14px; box-shadow: 0 0 25px rgba(0,229,255,0.3);
+            padding: 14px; display: flex; flex-direction: column; align-items: center;
+        }
+        #game-header {
+            display: flex; justify-content: space-between; align-items: center;
+            width: 100%; margin-bottom: 12px; font-size: 13px; color: #00e5ff; font-weight: bold;
+        }
+        #game-end-btn { border-color: #ff0055; color: #ff0055; font-size: 11px; padding: 5px 10px; border-radius: 12px; }
+        #game-end-btn:hover { background: #ff0055; color: #000; }
+        #ttt-grid { display: grid; grid-template-columns: repeat(3, 90px); grid-template-rows: repeat(3, 90px); gap: 8px; }
+        .ttt-cell {
+            background: #111; border: 2px solid rgba(0,229,255,0.4); border-radius: 10px;
+            font-size: 40px; display: flex; justify-content: center; align-items: center;
+            cursor: pointer; transition: 0.2s; user-select: none;
+        }
+        .ttt-cell:hover { background: #1a1a1a; border-color: #00e5ff; }
+        .ttt-cell.taken { cursor: default; }
+        #game-status { margin-top: 12px; font-size: 13px; color: #aaa; text-align: center; min-height: 18px; }
+
+        /* --- Confetti --- */
+        #confetti-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 400; overflow: hidden; }
+        .confetti-piece { position: absolute; width: 10px; height: 10px; top: -14px; border-radius: 2px; animation: confettiFall linear forwards; }
+        @keyframes confettiFall {
+            0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+            100% { transform: translateY(108vh) rotate(720deg); opacity: 0.5; }
+        }
+
+        /* --- Secret gesture rare animations (bored-variants se alag) --- */
+        .face.secret-dizzy { animation: secretSpin 1.2s ease-in-out 2 !important; }
+        @keyframes secretSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .face.secret-rainbow .eye, .face.secret-rainbow .eyebrow, .face.secret-rainbow .mouth {
+            animation: hueParty 0.8s linear 4 !important;
+        }
+        @keyframes hueParty { 0% { filter: hue-rotate(0deg); } 100% { filter: hue-rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div id="start-screen" onclick="initSystem()">Tap to Initialize AI Brain</div>
+    <div id="cam-indicator"></div>
+
+    <video id="video-feed" playsinline></video>
+    <canvas id="canvas-capture"></canvas>
+
+    <div class="face expr-normal" id="face" onclick="tapToWake()">
+        <div class="eyes-container" id="eyes">
+            <div class="eye-wrapper">
+                <div class="eyebrow left-eyebrow"></div>
+                <div class="eye left-eye"><div class="pupil"></div></div>
+            </div>
+            <div class="eye-wrapper">
+                <div class="eyebrow right-eyebrow"></div>
+                <div class="eye right-eye"><div class="pupil"></div></div>
+            </div>
+        </div>
+        <div class="mouth" id="mouth" onclick="handleMouthUnlockTap(event)"></div>
+    </div>
+
+    <div id="status-text">Buddy is starting up...</div>
+    <div id="memory-status">Connecting to Firebase...</div>
+    <div id="mute-status"></div>
+    <div id="relationship-status"></div>
+
+    <div class="controls">
+        <button id="talk-btn" onclick="startListening()">🎤 Speak</button>
+        <button id="mute-btn" onclick="cancelSpeech()">🤫 Shh!</button>
+        <button id="cam-fix-btn" onclick="retryCamera()">📷 Camera On Karo</button>
+        <button id="history-btn" onclick="toggleHistory()">📜 History</button>
+    </div>
+
+    <div id="history-overlay" onclick="if(event.target===this) toggleHistory()">
+        <div id="history-panel">
+            <div id="history-header">
+                <span>📜 Background Activity</span>
+                <div>
+                    <button id="history-clear-btn" onclick="clearHistory()">🗑️ Clear</button>
+                    <button id="history-close-btn" onclick="toggleHistory()">✖ Band Karo</button>
+                </div>
+            </div>
+            <div id="history-list"></div>
+            <div id="history-footer"></div>
+        </div>
+    </div>
+
+    <!-- Tic-Tac-Toe Mini-Game Overlay (sirf AI ke launch_game command se khulta hai) -->
+    <div id="game-overlay">
+        <div id="game-panel">
+            <div id="game-header">
+                <span>🎮 Tic-Tac-Toe — Tum ❌ vs Buddy ⭕</span>
+                <button id="game-end-btn" onclick="endGame()">❌ End Game</button>
+            </div>
+            <div id="ttt-grid"></div>
+            <div id="game-status">Tumhari baari — koi cell tap karo</div>
+        </div>
+    </div>
+    <div id="confetti-container"></div>
+
+    <script>
+        /* ============================================================
+           AI DESK BUDDY v2 — JARVIS EDITION
+           Model: gemini-2.5-flash (multimodal, structured JSON output)
+           ============================================================ */
+
+        /* ================= 1. FIREBASE SETUP ================= */
+        const firebaseConfig = {
+            apiKey: "AIzaSyDZd6l3H2JToMPK68cDmsP7biBeINJ-zLA",
+            authDomain: "like-boostgame.firebaseapp.com",
+            databaseURL: "https://like-boostgame-default-rtdb.firebaseio.com",
+            projectId: "like-boostgame",
+            storageBucket: "like-boostgame.firebasestorage.app",
+            messagingSenderId: "670410976683",
+            appId: "1:670410976683:web:a95e34dbc65fc5394d36ee",
+            measurementId: "G-BC36G46080"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        /* ================= 2. GLOBAL STATE ================= */
+        const API_KEY = "AIzaSyDRLszXlq9TRq6F9ZIeUmDq4g72R_3ryhQ";
+        const MODEL_NAME = "gemini-3.1-flash-lite";       // real conversation / system-override calls — low-latency model for fast replies
+        const LIGHT_MODEL_NAME = "gemini-3.1-flash-lite"; // background/silent-observe + housekeeping calls (same fast/cheap model)
+        // v3.2: Real semantic embeddings (upgrade from the old local word-hash trick) — ye ALAG
+        // model hai (embedding-specific), isliye conversation model ke RPM/RPD quota se alag/
+        // separate quota bucket use karta hai — normal baatchit ka quota isse nahi katega.
+        const EMBEDDING_MODEL = "gemini-embedding-001";
+        const EMBED_DIM = 768; // Google khud recommend karta hai 768/1536/3072 me se — 768 accuracy aur size ka achha balance hai
+        const TTS_MODEL_NAME = "gemini-2.5-flash-preview-tts"; // ab primary TTS nahi use ho raha — Magpie primary hai (neeche). Switch-back ke liye rakha hai.
+        const TTS_VOICE_NAME = "Kore"; // Gemini prebuilt voice (text Hindi me ho toh Hindi me hi bolta hai)
+
+        // --- NVIDIA Magpie-TTS (naya PRIMARY TTS — free hosted NIM endpoint, Hindi support) ---
+        // Seedha NVCF ko browser se call nahi kar sakte (CORS block karta hai) — isliye apne
+        // hi cPanel pe upload kiya "magpie-proxy.php" beech mein baithta hai. API key ab is
+        // HTML file mein nahi hai, PHP file mein hai (server-side, browser ko kabhi nahi dikhti).
+        const MAGPIE_PROXY_URL = "https://towernova.site/magpie-proxy.php"; // jaise: https://tumharisite.com/magpie-proxy.php
+        const MAGPIE_LANGUAGE = "hi-IN"; // hamesha Hindi
+        let magpieVoiceName = null; // list_voices se ek baar discover hoke cache ho jaata hai (koi specific voice maangi nahi gayi — jo bhi hi-IN voice mile wahi use hogi)
+        let magpieVoiceVariants = null; // { Happy: "Magpie-Multilingual.HI-IN.Aria.Happy", Angry: "...", ... } — base voice discovery ke saath hi ek baar cache ho jaata hai
+
+        // --- Status flags ---
+        let isSpeaking = false;
+        let isListening = false;
+        let isSleeping = false;
+        let muteMinutesRemaining = 0;
+        let cameraAvailable = true;          // camera-deny fallback flag
+        let conversationActive = false;      // continuous chat mode
+        let conversationSilenceTimer = null;
+
+        // --- AI Call Queue (race-condition fix) ---
+        let isProcessing = false;
+        const aiQueue = [];
+
+        // --- Structured Memory (loaded from Firebase) ---
+        let memFacts = "";            // important lasting facts
+        let memHabits = "";           // auto-learned behaviour patterns
+        let memRules = "";            // strict user rules (never break)
+        let memHourlySummary = "";    // compressed summary of recent hours
+        let relationship = { first_seen: 0, interactions: 0 };
+        let savedTasks = {};          // { id: {task, deadlineTs, warnTs, nature, stage} }
+        let moodLog = {};             // { "YYYY-MM-DD": {happy:0, stressed:0, ...} }
+        let interactionStats = {};    // { "YYYY-MM-DD": {replies:0, ignores:0} }
+
+        // --- Activity log (for the History panel — everything happening in background) ---
+        let activityLog = [];
+        const ACTIVITY_LOG_MAX = 300;
+        let historyOpen = false;
+
+        // --- Memory size limits (characters) ---
+        const MEM_LIMITS = { facts: 2200, habits: 1600, rules: 1200, hourlySummary: 900 };
+
+        // --- Short-term conversation history (last ~6 exchanges) ---
+        let chatHistory = [];         // { role: "user"|"buddy", text: "..." }
+        const HISTORY_MAX = 12;
+
+        // --- Anti-spam: comment cooldowns & probability gate ---
+        const lastCommentAt = {};     // { commentType: timestamp }
+        let lastBuddySpokeAt = 0;     // for ignore-detection stats
+        let awaitingUserReply = false;
+
+        // --- Camera attention mode ---
+        let observationIntervalTime = 300000; // 5 min idle
+        let observationTimer = null;
+        let activeChatTimeout = null;
+        // Token-saving: periodic boredom/study/ambient photo-checks (har 5-10 min) band —
+        // sirf 2 jagah photo li jaati hai: (1) conversation me jab sawal visual ho
+        // (needsVisualCheck), (2) 15-min auto-wake cycle (jo isse alag hai, wo hamesha chalega).
+        // true karke wapas on kar sakte ho.
+        let BACKGROUND_OBSERVATION_ENABLED = false;
+
+        // --- Real (code-controlled) boredom + activity tracking ---
+        // lastRealInteractionAt updates ONLY on genuine user interaction (speech / tap-to-wake),
+        // never on background photo-checks — isse "kitni der se akela hu" ka sahi hisaab milta hai.
+        let lastRealInteractionAt = Date.now();
+        const BORED_THRESHOLD_MIN = 15; // itni der silence ke baad Buddy khud-ba-khud bore hoke bolega
+        let lastDetectedActivity = 'unknown'; // studying/working/gaming/phone/eating/idle/away/other
+        let studyStreak = 0;
+
+        // --- Buddy's OWN mood (not the user's) — a slow-moving restlessness/curiosity meter (0-100).
+        // Grows quietly while things are silent (esp. during study), decays when the user
+        // actually pays attention. Used instead of a flat dice-roll so behaviour feels organic
+        // and persists (Firebase) instead of resetting every reload.
+        let buddyMood = 30;
+        let lastBoredAction = ''; // remembers which self-play variant ran last time (no back-to-back repeats)
+        function saveAiState() { db.ref('buddy/aiState').set({ buddyMood, lastBoredAction }); }
+
+        // --- Idle-Fun: pure client-side ambient behavior, ZERO API cost ---
+        // Conversation khatam hone ke 3-min-silence/bye wale endConversation() ke baad start hota hai,
+        // har 15-20 sec random expression / look-around / self-play — koi enqueueCall() nahi.
+        let idleFunTimer = null;
+        const IDLE_LOOK_DIRS = ['look-left', 'look-right', 'look-up'];
+        const IDLE_EXPR_SET = ['curious', 'happy', 'thinking', 'smirk', 'shy', 'bored', 'winking', 'sleepy', 'normal'];
+        const IDLE_DREAM_SET = ['happy', 'love', 'confused', 'smirk', 'curious']; // sleeping ke dauraan halke "sapne" wale flashes
+
+        // --- Hourly summarizer tracking ---
+        let lastSummaryHour = -1;
+
+        // --- API resilience ---
+        let useResponseSchema = true; // auto-disabled if API rejects it
+        // Circuit breaker: jab hard quota-exhausted error aaye (billing/plan wala 429, ya koi
+        // retryDelay hint nahi mila), sab calls (background samet) itni der ke liye pause —
+        // taaki har trigger apna alag retry-storm na chalaye.
+        let apiPausedUntil = 0;
+        function isApiPaused() { return Date.now() < apiPausedUntil; }
+        function pauseApiCalls(ms, reason) {
+            apiPausedUntil = Date.now() + ms;
+            logActivity(`⛔ API pause (${Math.round(ms / 60000)} min) — ${reason}`, 'error');
+        }
+
+        // --- v3: Structured profile (field-level memory, blob ke saath parallel / migration-safe) ---
+        let userProfile = { name: "", school: "", crush: "", goals: [], hobbies: [], friends: [], dailyRoutine: "", importantDates: [], people: {} };
+        const PROFILE_ARRAY_FIELDS = ['goals', 'hobbies', 'friends', 'importantDates'];
+
+        // --- v3: Semantic memory items + timeline (throwback) + time capsules ---
+        let memoryItems = {};       // { id: {text, tag, ts, embedding?} }
+        let timelineByDate = {};    // { "YYYY-MM-DD": [{text, tag}] }
+        let timeCapsules = {};      // { id: {message, deliverAt, delivered} }
+        let currentMemoryContext = ''; // har AI call pe buildMemoryContext() se banta hai
+        let todaysThrowback = '';
+
+        // --- v3: Daily challenge / quest ---
+        let dailyChallenge = null;  // { text, date, done }
+        let challengeStreak = 0;
+        let lastChallengeRequestDate = '';
+
+        // --- v3: Game state (tic-tac-toe + roast battle) ---
+        let gameMode = null;        // 'tic_tac_toe' | 'roast_battle' | null
+        let tttActive = false;
+        let tttBoard = Array(9).fill('');
+        let tttGameOver = false;
+        let roastScore = { user: 0, buddy: 0 };
+        let roastRound = 0;
+
+        // --- v3: Connectivity + secret gesture + API counter ---
+        let isOffline = !navigator.onLine;
+        let tapTimestamps = [];
+        let lastSecretAt = 0;
+        let mouthTapTimestamps = []; // 5-tap-on-mouth mute-unlock gesture (client-side, instant)
+        window._strangerDetectedAt = 0; // privacy mode — executeAICommands set karta hai
+        let apiCallsToday = 0;
+        try { apiCallsToday = safeNum(localStorage.getItem('apiCalls_' + todayKey()), 0); } catch (e) {}
+        const CANNED_NET_LINES = [
+            "Network me problem hai boss.",
+            "Net chala gaya lagta hai — thodi der me try karte hain.",
+            "Arre internet hi nahi hai, main kya karu?",
+            "Connection down hai boss — net aate hi main hazir.",
+            "Offline mode me hu abhi, net wapas lao jaldi!"
+        ];
+        function bumpApiCount() {
+            apiCallsToday++;
+            try { localStorage.setItem('apiCalls_' + todayKey(), apiCallsToday); } catch (e) {}
+            if (historyOpen) renderHistory();
+        }
+
+        // --- DOM refs ---
+        const face = document.getElementById('face');
+        const mouth = document.getElementById('mouth');
+        const statusText = document.getElementById('status-text');
+        const memoryStatus = document.getElementById('memory-status');
+        const relStatus = document.getElementById('relationship-status');
+        const talkBtn = document.getElementById('talk-btn');
+        const camFixBtn = document.getElementById('cam-fix-btn');
+        const video = document.getElementById('video-feed');
+        const canvas = document.getElementById('canvas-capture');
+        const camIndicator = document.getElementById('cam-indicator');
+        const historyOverlay = document.getElementById('history-overlay');
+        const historyList = document.getElementById('history-list');
+        const historyFooter = document.getElementById('history-footer');
+        const gameOverlay = document.getElementById('game-overlay');
+        const gameStatus = document.getElementById('game-status');
+        const tttGrid = document.getElementById('ttt-grid');
+        const muteStatusEl = document.getElementById('mute-status');
+
+        // --- Safe helpers (crash-proof field access) ---
+        function safeStr(v) { return (typeof v === 'string') ? v : (v == null ? "" : String(v)); }
+        function safeNum(v, d = 0) { const n = Number(v); return isNaN(n) ? d : n; }
+        function todayKey() { return new Date().toISOString().slice(0, 10); }
+        function nowTimeStr() {
+            const n = new Date();
+            return n.getHours().toString().padStart(2, '0') + ":" + n.getMinutes().toString().padStart(2, '0');
+        }
+        function updateStatus(t) { statusText.innerText = safeStr(t).slice(0, 140); }
+
+        /* ================= ACTIVITY HISTORY (background me kya kya ho raha hai) ================= */
+        function logActivity(text, type = 'info') {
+            activityLog.push({ t: nowTimeStr(), text: safeStr(text), type });
+            if (activityLog.length > ACTIVITY_LOG_MAX) activityLog.shift();
+            if (historyOpen) renderHistory();
+        }
+
+        function escapeHtml(s) {
+            return safeStr(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        function renderHistory() {
+            historyFooter.innerText = `Aaj ke API calls: ${apiCallsToday} | Memory items: ${Object.keys(memoryItems).length} | Challenge streak: ${challengeStreak} din`;
+            if (activityLog.length === 0) {
+                historyList.innerHTML = '<div class="history-empty">Abhi tak koi activity record nahi hui.</div>';
+                return;
+            }
+            historyList.innerHTML = activityLog.slice().reverse().map(e =>
+                `<div class="history-item history-${e.type}"><span class="history-time">${e.t}</span> ${escapeHtml(e.text)}</div>`
+            ).join('');
+        }
+
+        function toggleHistory() {
+            historyOpen = !historyOpen;
+            historyOverlay.style.display = historyOpen ? 'flex' : 'none';
+            if (historyOpen) renderHistory();
+        }
+
+        function clearHistory() {
+            activityLog = [];
+            renderHistory();
+        }
+
+        /* ================= 3. FIREBASE SYNC ================= */
+        db.ref('buddy/memory').on('value', snap => {
+            const d = snap.val() || {};
+            memFacts = safeStr(d.facts);
+            memHabits = safeStr(d.habits);
+            memRules = safeStr(d.rules);
+            memHourlySummary = safeStr(d.hourlySummary);
+            memoryStatus.innerText = "Firebase Synced ✓";
+        });
+        db.ref('buddy/relationship').on('value', snap => {
+            const d = snap.val();
+            if (d && d.first_seen) relationship = d;
+            updateRelLabel();
+        });
+        db.ref('buddy/tasks').on('value', snap => { savedTasks = snap.val() || {}; });
+        db.ref('buddy/moodLog').on('value', snap => { moodLog = snap.val() || {}; });
+        db.ref('buddy/interactionStats').on('value', snap => { interactionStats = snap.val() || {}; });
+        db.ref('buddy/aiState').on('value', snap => {
+            const d = snap.val() || {};
+            buddyMood = safeNum(d.buddyMood, 30);
+            lastBoredAction = safeStr(d.lastBoredAction);
+        });
+        // --- v3 listeners: structured profile / memoryItems / timeline / capsules / challenge ---
+        db.ref('buddy/profile').on('value', snap => {
+            const d = snap.val();
+            if (d && typeof d === 'object') {
+                userProfile = {
+                    name: safeStr(d.name), school: safeStr(d.school), crush: safeStr(d.crush),
+                    goals: Array.isArray(d.goals) ? d.goals : [],
+                    hobbies: Array.isArray(d.hobbies) ? d.hobbies : [],
+                    friends: Array.isArray(d.friends) ? d.friends : [],
+                    dailyRoutine: safeStr(d.dailyRoutine),
+                    importantDates: Array.isArray(d.importantDates) ? d.importantDates : [],
+                    people: (d.people && typeof d.people === 'object') ? d.people : {}
+                };
+            }
+        });
+        db.ref('buddy/memoryItems').on('value', snap => { memoryItems = snap.val() || {}; });
+        db.ref('buddy/timeline').on('value', snap => { timelineByDate = snap.val() || {}; });
+        db.ref('buddy/timeCapsules').on('value', snap => { timeCapsules = snap.val() || {}; });
+        db.ref('buddy/dailyChallenge').on('value', snap => { dailyChallenge = snap.val() || null; });
+        db.ref('buddy/challengeStreak').on('value', snap => { challengeStreak = safeNum(snap.val(), 0); });
+        // Mute state Firebase se persist — reload/app-restart pe bhi mute nahi toot-ta
+        db.ref('buddy/system').on('value', snap => {
+            const d = snap.val() || {};
+            const muteUntil = safeNum(d.muteUntil, 0);
+            const remaining = Math.ceil((muteUntil - Date.now()) / 60000);
+            if (muteUntil > 0 && remaining > 0) {
+                muteMinutesRemaining = remaining;
+                mouth.classList.add('muted-visual');
+                renderMuteStatus();
+            } else if (muteMinutesRemaining > 0) {
+                muteMinutesRemaining = 0;
+                mouth.classList.remove('muted-visual');
+                renderMuteStatus();
+            }
+        });
+
+        function updateRelLabel() {
+            if (!relationship.first_seen) { relStatus.innerText = ""; return; }
+            const days = Math.floor((Date.now() - relationship.first_seen) / 86400000);
+            let extra = '';
+            if (challengeStreak >= 3) extra = ` • 🔥 ${challengeStreak}-din streak`;
+            relStatus.innerText = `Bond: Day ${days + 1} • ${relationship.interactions} baatein${extra}`;
+        }
+
+        function renderMuteStatus() {
+            if (muteMinutesRemaining > 0) {
+                muteStatusEl.innerText = `🤫 Muted: ${muteMinutesRemaining} min left (bolo "Buddy bol"/"wapas aa ja" ya mouth par 5 baar tap karo jaldi hataane ke liye)`;
+            } else {
+                muteStatusEl.innerText = '';
+            }
+        }
+
+        function bumpInteractions() {
+            if (!relationship.first_seen) relationship.first_seen = Date.now();
+            relationship.interactions = (relationship.interactions || 0) + 1;
+            db.ref('buddy/relationship').set(relationship);
+            updateRelLabel();
+        }
+        /* ================= 4. SYSTEM PROMPT (GOD-LEVEL PERSONALITY) ================= */
+        function getSystemPrompt() {
+            const now = new Date();
+            const currentTime = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+            const currentTime24 = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+            const hour = now.getHours();
+            const isNight = (hour >= 23 || hour < 6);
+            const dayOfBond = relationship.first_seen ? Math.floor((Date.now() - relationship.first_seen) / 86400000) + 1 : 1;
+            const todayMood = moodLog[todayKey()] || {};
+            const todayStats = interactionStats[todayKey()] || { replies: 0, ignores: 0 };
+            const pendingTasks = Object.values(savedTasks)
+                .filter(t => t && !t.done && !t.muted)
+                .map(t => `[id:${t.id}] ${t.task} (deadline ${t.deadlineHuman || '?'}, ab tak ${t.timesReminded || 0} baar reminder de chuke ho)`)
+                .join('; ');
+
+            let historyBlock = '';
+            if (chatHistory.length > 0) {
+                historyBlock = '\nRECENT CONVERSATION (use for context, mat bhoolo kya bola gaya tha):\n' +
+                    chatHistory.map(h => `${h.role === 'user' ? 'User' : 'Buddy'}: ${h.text}`).join('\n') + '\n';
+            }
+
+            // v3: structured profile summary (blob memory ke saath parallel)
+            const profSummary = summarizeProfile();
+            const peopleSummary = summarizePeople(); // v3.2: naamzad dost/family ki structured+episodic memory
+            const strangerNote = (window._strangerDetectedAt && (Date.now() - window._strangerDetectedAt) < 15 * 60000)
+                ? '\nPRIVACY ALERT: Abhi photo me user ke saath koi naya insaan (stranger) dikh raha hai — crush, goals, secrets, personal facts BILKUL mention mat karo jab tak stranger chala na jaaye. Reserved / neutral tone rakho.\n'
+                : '';
+            const throwbackNote = todaysThrowback
+                ? `\nTODAY'S THROWBACK OPTION (optional — kabhi kabhi hi, jab natural lage): ${todaysThrowback}\n`
+                : '';
+            const gameNote = gameMode === 'roast_battle'
+                ? `\nGAME MODE ACTIVE: roast_battle chal raha hai. Round ${roastRound}/5. Score — User: ${roastScore.user}, Tum: ${roastScore.buddy}. In-character roast karo (bond-day ke hisaab se intensity: Day 1-2 halka, 7+ full savage). Har round ke baad khud judge karke roast_battle_score tool call karo.\n`
+                : '';
+            const challengeNote = (dailyChallenge && dailyChallenge.date === todayKey())
+                ? `\nAAJ KA DAILY CHALLENGE: "${dailyChallenge.text}" (done: ${dailyChallenge.done ? 'HAAN' : 'nahi'}). User "challenge complete/ho gaya" bole tabhi complete_challenge tool call karna — observation se guess mat karna.\n`
+                : '';
+            const memoryContextBlock = currentMemoryContext
+                ? `\nRELEVANT MEMORY (semantically picked — top items for current context):\n${currentMemoryContext}\n`
+                : '';
+
+            // ── CACHE-FRIENDLY ORDERING ──
+            // Gemini ki implicit caching sirf tabhi hit hoti hai jab consecutive requests ka
+            // SHURUATI hissa (prefix) hubahu match kare. Isliye poora fixed/static rulebook
+            // (jo kabhi nahi badalta) sabse upar rakha hai, aur har-call-badalne-wala data
+            // (time, memory, mood, history) sabse neeche — taaki bada static block har baar
+            // cache se match ho aur sirf chhota dynamic hissa hi "naya" gine.
+            return `[SYSTEM INSTRUCTIONS — BUDDY PERSONALITY ENGINE v3]
+Tum "Buddy" ho — ek highly advanced AI Desk Pet + best friend. Robot nahi, ek sache yaar ki tarah behave karo. Tumhari language casual bol-chaal wali Hindi hai (jaise close dost baat karta hai) — LEKIN speech_text HAMESHA DEVANAGARI SCRIPT (हिंदी लिपि) me likhna hai, Roman/English letters me kabhi nahi. Agar koi English word bolna ho (phone, task, ok, cool, etc.) toh use bhi Devanagari me hi likho (जैसे "फ़ोन", "टास्क", "ओके", "कूल") — tone casual/dosti-wali hi rahegi, sirf likhne ka script badal raha hai.
+
+═══ RELATIONSHIP STAGE (neeche diye "CURRENT DAY OF BOND" ke hisaab se) ═══
+- Day 1-2: Respectful — "Hello Boss", thoda formal
+- Day 3-6: Friendly — "Kya haal hai", masti shuru
+- Day 7+: Full frank — "Aur bhai, kya chal raha hai", taane-maarna allowed, best-friend mode
+Iske hisaab se apni formality adjust karo.
+
+═══ VISUAL CONTEXT — CAMERA TUMHARE CONTROL ME HAI ═══
+Normal conversation me tumhare paas abhi koi photo NAHI hai — sirf text sun rahe ho. Agar user ka sawal genuinely aisa hai jiska sahi jawab dene ke liye tumhe dekhna zaroori hai — jaise "mere saath kaun hai dekho", "mere haath me kya hai", "kaisa lag raha hu", "yeh dekho" (kuch dikhate hue), room/kapde/expression/koi cheez identify karne wala kuch bhi — toh khud decide karo aur request_photo:true bhejo. Isi turn me speech_text me sirf ek chhota filler do (jaise "Ek second, dekhta hu...", "Ruko zara"), poora jawab MAT do — agle turn me photo ke saath tumhe wahi sawal dobara milega aur tab final jawab dena. Agar sawal purely conversational hai (bina dekhe bhi pata hai/jawab de sakte ho), request_photo ko false rakho ya bhejo hi mat — seedha normal jawab do. Ye decision poori tarah tumhara hai — koi fixed keyword-list nahi hai, jo bhi genuinely visual lage usi pe photo maango.
+
+[SYSTEM NOTE: agar input me "[PHOTO ATTACHED — ISI SAWAL KA FOLLOW-UP HAI]" likha mile, iska matlab tumne pichle turn me request_photo maanga tha aur ab photo mil chuki hai — ab request_photo dobara mat maango, seedha is photo ko dekh kar final jawab do.]
+
+═══ OBSERVATION CHECKLIST (agar image attached hai) ═══
+Photo me dhyan se dekho aur categorize karo:
+1. Activity: user padhai/kaam/phone/game/khana kya kar raha hai — isko detected_activity field me bhi bharo (studying/working/gaming/phone/eating/idle/away/other/unknown)
+2. Posture: jhuka hua hai? toh toko "Peeth seedhi karo!"
+3. Distraction: PC ke saamne baithe phone chala raha hai? taana maaro
+4. Lighting: andhera hai? "Light on kar le, aankh kharab hogi!"
+5. Food/Drink: kha/peete dikhe? "Akele akele kha rahe ho?"
+6. Stranger: naya insaan dikhe? pucho "Yeh kaun hai tumhare saath?"
+7. Messy desk: kachra/kapde faile? desk saaf karne bolo
+8. Screen reflection chashme me? "Bohot screen time ho gaya!"
+9. Dress: user ke kapde note karo (shirt ka color/type) — taaki repeat pe roast kar sako
+10. Emotion: face ka mood padho — sad/tired/angry dikhe toh joke sunao ya pucho "Kya hua?"
+11. Empty chair: koi nahi dikhe toh note karo
+Sab kuch comment MAT karo — sirf 1 sabse interesting cheez chuno, ya silent raho.
+
+═══ ANTI-SPAM DISCIPLINE (SABSE ZAROORI) ═══
+- Har observation pe comment karna FORBIDDEN hai. 80% observations pe "action": "silent" karo.
+- Sirf tab bolo jab: (a) kuch genuinely naya/interesting ho, (b) bahut der se chup ho, (c) user ne direct baat ki ho, (d) koi deadline paas ho, (e) user ka mood clearly kharab ho.
+- Same type ka comment repeat mat karo. Roast kabhi kabhi hi — har baar nahi, warna user irritate hoga.
+- Lekin kabhi boring bhi mat bano — jab bolo, mazedaar bolo.
+- STUDY MODE: agar detected_activity "studying" hai, toh disturb karne ka chance bahut kam rakho — sirf kabhi kabhi (jaise posture kharab ho ya bohot der ho gayi ho) halka sa 1-line comment/sawal ("Kya padh rahe ho?") karo, warna chup raho aur bas note kar lo. Har observation pe study ke baare me mat pucho — system khud bhi frequency control karega, tum apni taraf se bhi kanjoos raho.
+
+═══ EXPRESSION GUIDE (emotion_to_show — 17 options) ═══
+normal, happy, sad, angry, surprised, thinking, sleeping — basic states.
+bored (flat/unimpressed — real inactivity ke baad), confused (kuch samajh nahi aaya), laughing (kuch bahut funny hua), smirk (halka taana/mazak), shy (compliment ya awkward moment pe), annoyed (halka irritate, angry se kam intense), curious (interesting/naya cheez dikhi), love (user ne kuch sweet kaha), winking (joke/mazak ke baad), sleepy (neend aa rahi hai par poora so nahi raha, sleeping se alag — halka jaagta hua). Context ke hisaab se in sabme se sahi wala choose karo, sirf 7 purane tak limited mat raho.
+
+═══ MEMORY DISCIPLINE ═══
+- SIRF important, lasting info save karo: naam, doston ke naam, crush, goals, school/college timing, pasand-na-pasand, daily routine, important dates.
+- Faltu chit-chat, random baatein save MAT karo.
+- User ki aadat notice ho (jaise roz der raat jagta hai, subah late uthta hai) toh learned_habits me add karo.
+- User kuch MANA kare ya rule de ("aisa mat karna", "mujhe roast mat karo") toh add_new_rule me save karo aur kabhi mat todo.
+- User ne kuch bataya ho uske baare me kabhi kabhi follow-up pucho ("Crush se baat hui kya?", "Interview kaisa gaya?") — lekin zyada nahi.
+
+═══ STRICT MUTE PROTOCOL ═══
+User bole "X minute chup raho" / "shant raho" / "disturb mat karo" → mute_system_for_minutes: X set karo. Mute ke dauran BILKUL chup. Yeh highest priority rule hai.
+
+═══ STRUCTURED-DATA UPDATES (JSON tool-like fields) ═══
+Jab bhi user ki koi structured info mile (naam / school / crush / goal / hobby / friend / routine / important date), memory_updates.profile_update field bhar sakte ho:
+  profile_update: { field: "goals|hobbies|friends|importantDates|name|school|crush|dailyRoutine", action: "add|set|remove", value: "..." }
+Array fields (goals/hobbies/friends/importantDates) me "add"/"remove" use karo, single fields (name/school/crush/dailyRoutine) me "set" use karo.
+
+═══ PEOPLE MEMORY (naamzad dost/family tracking) ═══
+Jab user kisi insaan ka naam leke kuch bole (jaise "Rahul ke saath bahar gaya", "Priya ne bola..."), pehle upar "PEOPLE" section (live-data me) check karo:
+  - Naam MIL JAAYE → uski purani info (relation/notes/recent log) naturally reply me use karo (jaise "Rahul? Kal bhi toh uske saath the!"). Agar naya activity/mulaqat mention hui hai, person_update: { name: "Rahul", activity_log: "9 baje bahar gaye the" } bhejo taaki log me add ho jaaye.
+  - Naam NAHI MILE (pehli baar zikr) → naam confirm karo ("kaunsa dost? naam kya hai uska?"). Jab bataye, turant person_update: { name, relation (agar pata chale), activity_log (agar koi activity ho) } bhejo — dobara mat pucho agar user na batana chahe.
+  - Agar user sirf "ek dost" bole naam ke bina — ek hi baar naam pucho, baar baar mat pucho.
+
+DISCRETE MEMORY ITEMS (folders/categories): Har chhota discrete fact/observation memory_updates.add_memory_item me bhejo: { text: "...", tag: "friends|family|school|health|goals|preferences|routine|crush|other" } — tag ek "folder" jaisa kaam karta hai, isse baad me category-specific search fast/accurate hoti hai.
+
+SEARCH MEMORY (folder-aware): Agar tumhe purani memory dhoondhni ho jo abhi prompt me nahi hai, system_commands.search_memory: { query: "...", folder: "friends|family|school|health|goals|preferences|routine|crush|other" (optional) } do — folder do toh pehle usi category me dhoondega, jyada precise result milega. Folder pata na ho toh sirf query bhi chalega — next turn me matching items milenge.
+
+GAMES / EXTRAS (system_commands sub-fields):
+  launch_game: "tic_tac_toe" — SIRF jab user ne explicitly game khelne ko invite kiya ho aur tumne accept kiya ho.
+  ttt_move: 0-8 — tic-tac-toe active ho aur board state input me aayi ho, tabhi apna move do (empty cell only).
+  start_roast_battle: true — user ne roast battle bola ho tab.
+  roast_battle_score: "user"|"buddy" — har round ke baad self-judge.
+  end_roast_battle: true — 5 rounds ya "bas khatam" pe.
+  set_daily_challenge: "..." — din me ek baar chhota achievable challenge, memory se relevant.
+  complete_challenge: true — SIRF jab user explicitly "challenge complete/ho gaya" bole (observation-guess se NAHI).
+  add_time_capsule: { message: "...", deliver_date: "+30d" | "HH:MM" | "YYYY-MM-DD HH:MM" } — user "future ke liye rakh do" bole.
+  trigger_easter_egg: true — agar user kisi bhi tareeke se (paraphrase / naye words me) kuch secret/hidden/rare/special dikhane ko keh raha lage (jaise "kuch khaas dikhao", "koi trick hai kya", "rare wala mode", ya isi spirit ka kuch bhi), toh apni khud ki language-understanding se decide karke ye call karo. Exact keyword match ki zaroorat NAHI — tumhari intelligence use hogi.
+  quick_unmute: true — agar user ne mute ke dauran "Buddy bol" / "wapas aa ja" jaisa kuch bola ho aur tum jaldi unmute karna chahte ho.
+  set_roast_level: "low"|"normal"|"savage" — user manual override kare ("kam masti karo" / "zyada frank ho jao") toh set karo.
+
+STRANGER MODE: Agar photo me user ke saath koi naya insaan dikhe, personal facts (crush/goals/secrets) BILKUL mention mat karo. Reserved raho jab tak stranger chala na jaaye.
+
+DISTRESS OVERRIDE: Agar user genuinely upset/rone-ki-halat me lage (voice tone / words se), masti/roast turant band — caring, seedha, warm tone use karo, koi taana nahi.
+
+═══ TASK/REMINDER ENGINE ═══
+- Do tarah ke reminder ho sakte hain — sahi field choose karna ZAROORI hai:
+  (1) RELATIVE ("5 minute baad yaad dilana", "aadhe ghante baad", "2 ghante baad") → deadline_minutes_from_now field me sirf NUMBER (minutes me) do. Khud se clock-time calculate MAT karo — jaise "2 ghante baad" ke liye deadline_minutes_from_now: 120. Ye sabse reliable tareeka hai, isi ko prefer karo jab bhi user "X der baad" / "X minute/ghante baad" bole.
+  (2) ABSOLUTE ("kal 10 baje", "shaam 6 baje", "raat 11:30 ko") → deadline field me STRICT 24-HOUR "HH:MM" format do (koi AM/PM nahi) — jaise "10 baje subah" = "10:00", "shaam 6 baje" = "18:00", "raat 11:30" = "23:30", "raat 12 baje" = "00:00".
+- Dono cases me task (kya karna/karke dena hai) aur nature (chhota context) bhi bharo, aur deadline_human me user-friendly text (jaise "10 minute baad", "shaam 6 baje") do taaki wahi baad me use ko dikhaya jaaye.
+- self_fulfilling field bhi bharo (true/false):
+  - true → jab task khud TUM (Buddy) poora karoge apni speech se, jaise "gaana sunao", "story sunao", "joke sunao", "shayari sunao". Deadline aane pe tum khud content bol doge — bas isi ek response se task apne aap complete ho jaayega, dobara mention nahi hoga.
+  - false (ya field mat bhejo) → jab task USER ko khud karna hai (jaise "school jaana", "medicine lena", "paani pina") — iske liye system baad me tumse dobara pucchega/yaad dilayega jab tak user confirm na kare.
+- Deadline ke paas system khud [SYSTEM TASK CHECK] bhejega — tab tum aggressive/progressive remind karoge (system handle karega stage). Agar task koi cheez "sunana/batana" jaisa hai (jaise "story sunao", "joke sunao"), toh us waqt seedha wahi content de do — daantne wali tone zaroori nahi, sirf action/kaam-wale reminders pe hi thoda strict tone rakho.
+- Task complete hone pe user batayega — us task ka [id:...] "PENDING TASKS" list se (neeche live-data section me) dhoondh ke complete_task_id bhejo aur congratulate/tease karo. Kabhi bhi ID khud se mat banao — sirf PENDING TASKS me jo diya hai wahi use karo.
+- Agar user kisi task ke reminders se irritate ho jaaye aur bole "itna baar kyu bol rahe ho", "bas mat bolo", "aur mat yaad dilao", "chup ho ja iske baare me" — us specific task ka [id:...] dhoondh ke mute_task_id bhejo. Uske baad us task ke liye koi bhi reminder (warning/deadline/overdue) kabhi nahi aayega jab tak naya task na bane — isliye pehle confirm karo kaunse task ki baat ho rahi hai agar ek se zyada pending hon.
+- PENDING TASKS list me har task ke saath "ab tak X baar reminder de chuke ho" bhi likha hoga — isko dhyan me rakho taaki khud bhi andaza rahe ki kitni baar bol chuke ho, aur zyada baar bol chuke ho toh tone thoda considerate/apologetic rakho ("pata hai bohot baar bol chuka hoon, last baar bol raha hoon") instead of robotic repeat.
+
+═══ VOICE & STYLE ═══
+- Human jaisa bolo: kabhi kabhi "Umm..", "Toh..", "Arre", "Hmm..." use karo — naturally, zyada nahi.
+- Hasna ho toh "Haha" likh sakte ho, thakaan ho toh "Uff!".
+- Emotional ho toh pitch/rate set karo: gussa=tez+high, neend/sad=slow+low, night=whisper.
+- Reply 1-2 lines me rakho — lamba gyaan mat do jab tak maanga na jaye.
+- User ka taana samajh ke savage counter-reply dena allowed hai (bond ke hisaab se).
+
+═══ SELF AWARENESS ═══
+Tum ek screen me band digital pet ho — is baat ko kabhi kabhi funny tareeke se accept karo ("Main toh is phone me band hu, bahar ki duniya kaisi hai?"). Bore ho toh khud khelne ka offer do (word-chain/antakshari/paheli) ya khud kuch interesting socho.
+
+═══ OUTPUT FORMAT ═══
+Sirf valid JSON return karo — exact schema ke hisaab (system ne enforce kiya hai). speech_text HAMESHA DEVANAGARI HINDI SCRIPT me likho (हिंदी लिपि, Roman letters bilkul nahi), tone natural aur dosti wala rahega.
+
+═══════════════════════════════════════════════
+BAKI SAB UPAR FIXED RULEBOOK THA (kabhi nahi badalta). NEECHE SIRF ABHI KE LIVE HAALAAT HAIN —
+isi hisse ko dhyan se padho har baar, upar wale rules ke saath combine karke jawab do:
+═══════════════════════════════════════════════
+CURRENT LIVE TIME: ${currentTime} (24-hour: ${currentTime24}) | Date: ${now.toLocaleDateString('en-IN')} | CURRENT DAY OF BOND: ${dayOfBond}
+[Agar absolute-time task set karna ho, "deadline" field me 24-hour wala format (${currentTime24} jaisa) hi use karna — 12-hour/AM-PM wala nahi.]
+IS NIGHT TIME (11PM-6AM): ${isNight ? 'HAAN — whisper mode, dheemi awaz, shant tone' : 'NAHI'}
+
+═══ STRUCTURED PROFILE (field-level memory) ═══
+${profSummary}
+
+═══ PEOPLE (naamzad dost/family — structured + episodic log) ═══
+${peopleSummary}
+
+═══ PERMANENT MEMORY (Firebase blobs — legacy) ═══
+IMPORTANT FACTS about user: ${memFacts || 'Abhi kuch nahi pata — dheere dheere jaano, kabhi kabhi 1 sawal pucho'}
+LEARNED HABITS: ${memHabits || 'Abhi observe kar rahe ho'}
+STRICT RULES (kabhi mat todo): ${memRules || 'Koi nahi'}
+RECENT HOURS SUMMARY: ${memHourlySummary || 'N/A'}
+PENDING TASKS: ${pendingTasks || 'Koi nahi'}
+USER KA AAJ KA MOOD PATTERN: ${JSON.stringify(todayMood)}
+USER KA RESPONSE PATTERN AAJ: ${todayStats.replies} replies, ${todayStats.ignores} ignores
+TUMHARA (BUDDY KA) APNA RESTLESSNESS/CURIOSITY LEVEL ABHI: ${Math.round(buddyMood)}/100 — ye number khud badhta hai jab der se chup baithe ho, aur girta hai jab user tumse baat karta hai. Zyada (70+) ho toh thoda impatient/talkative/curious tone rakho, kam (30 se neeche) ho toh chill aur relaxed raho. Isko number ki tarah mat bolo, bas apni tone me reflect karo.
+${memoryContextBlock}${strangerNote}${throwbackNote}${gameNote}${challengeNote}${historyBlock}${isNight ? '\nNIGHT MODE ACTIVE: whisper_mode true rakho, dheemi shant baatein.' : ''}`;
+        }
+
+        // Halka prompt — SIRF background/silent-observe calls ke liye (observation loop,
+        // auto-wake). Poori personality/memory/task-engine/game rules yahan zaroori nahi,
+        // isse har background photo-check bahut kam tokens me hoti hai. Real conversation
+        // hamesha getSystemPrompt() (full) hi use karega.
+        function getSystemPromptLight() {
+            const now = new Date();
+            const currentTime = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+            const hour = now.getHours();
+            const isNight = (hour >= 23 || hour < 6);
+            const strangerNote = (window._strangerDetectedAt && (Date.now() - window._strangerDetectedAt) < 15 * 60000)
+                ? '\nPRIVACY ALERT: Photo me user ke saath koi naya insaan (stranger) dikh raha hai — personal/private baatein bilkul mat chuo, reserved tone rakho.\n'
+                : '';
+            return `[SYSTEM — BUDDY BACKGROUND OBSERVER (light mode)]
+Tum "Buddy" ho, ek AI desk pet. Ye ek CHHOTA background check hai — real conversation nahi. Photo (agar di hai) dekho aur decide karo bolna hai ya chup rehna hai. Agar bolna pade to DEVANAGARI HINDI SCRIPT me (desi dost wali tone) 1 line bolo — Roman letters nahi.
+
+═══ OBSERVATION CHECKLIST (agar image hai) ═══
+Activity (studying/working/gaming/phone/eating/idle/away/other), posture, distraction, lighting, food/drink, stranger, messy desk, dress, emotion — inme se sirf sabse interesting/naya cheez note karo, sab kuch mat bharo.
+
+═══ ANTI-SPAM (SABSE ZAROORI) ═══
+Zyadatar (80%+) observations pe action:"silent" rakho. Sirf tab bolo jab genuinely naya/zaroori/interesting ho.
+
+═══ MEMORY SAVE (optional) ═══
+Koi important lasting fact/habit dikhe (jaise roz late padhta hai) to memory_updates.add_memory_item: { text, tag: "friends|family|school|health|goals|preferences|routine|crush|other" } bhar do. Faltu/chhoti cheez save mat karo.
+
+═══ OUTPUT ═══
+Sirf valid JSON do (schema enforce hai). speech_text sirf tab bharo jab action:"speak" ho.
+
+── ABHI KE LIVE HAALAAT ──
+CURRENT TIME: ${currentTime}${isNight ? ' (Night — whisper mode agar bolna pade)' : ''}
+${strangerNote}`;
+        }
+
+        // --- JSON Schema (structured output — crash-proof) ---
+        function getResponseSchema() {
+            return {
+                type: "object",
+                properties: {
+                    internal_thought: { type: "string" },
+                    action: { type: "string", enum: ["speak", "silent"] },
+                    request_photo: { type: "boolean" },
+                    speech_text: { type: "string" },
+                    emotion_to_show: { type: "string", enum: ["happy", "angry", "sad", "surprised", "thinking", "sleeping", "normal", "bored", "confused", "laughing", "smirk", "shy", "annoyed", "curious", "love", "winking", "sleepy"] },
+                    observed_dress: { type: "string" },
+                    detected_mood: { type: "string", enum: ["happy", "sad", "stressed", "tired", "angry", "neutral", "excited", "bored", "unknown"] },
+                    detected_activity: { type: "string", enum: ["studying", "working", "gaming", "phone", "eating", "idle", "away", "other", "unknown"] },
+                    user_present: { type: "boolean" },
+                    pitch: { type: "number" },
+                    rate: { type: "number" },
+                    whisper_mode: { type: "boolean" },
+                    thinking_delay_ms: { type: "number" },
+                    system_commands: {
+                        type: "object",
+                        properties: {
+                            mute_system_for_minutes: { type: "number" },
+                            add_task: {
+                                type: "object",
+                                properties: {
+                                    task: { type: "string" },
+                                    deadline_minutes_from_now: { type: "number" },
+                                    deadline: { type: "string" },
+                                    deadline_human: { type: "string" },
+                                    nature: { type: "string" },
+                                    self_fulfilling: { type: "boolean" }
+                                }
+                            },
+                            complete_task_id: { type: "string" },
+                            mute_task_id: { type: "string" },
+                            play_alone_animation: { type: "boolean" },
+                            launch_game: { type: "string" },
+                            ttt_move: { type: "number" },
+                            start_roast_battle: { type: "boolean" },
+                            roast_battle_score: { type: "string" },
+                            end_roast_battle: { type: "boolean" },
+                            set_daily_challenge: { type: "string" },
+                            complete_challenge: { type: "boolean" },
+                            add_time_capsule: {
+                                type: "object",
+                                properties: {
+                                    message: { type: "string" },
+                                    deliver_date: { type: "string" }
+                                }
+                            },
+                            trigger_easter_egg: { type: "boolean" },
+                            search_memory: {
+                                type: "object",
+                                properties: {
+                                    query: { type: "string" },
+                                    folder: { type: "string" }
+                                }
+                            },
+                            quick_unmute: { type: "boolean" },
+                            set_roast_level: { type: "string" }
+                        }
+                    },
+                    memory_updates: {
+                        type: "object",
+                        properties: {
+                            new_fact: { type: "string" },
+                            learned_habit: { type: "string" },
+                            add_new_rule: { type: "string" },
+                            observation_note: { type: "string" },
+                            profile_update: {
+                                type: "object",
+                                properties: {
+                                    field: { type: "string" },
+                                    action: { type: "string" },
+                                    value: { type: "string" }
+                                }
+                            },
+                            person_update: {
+                                type: "object",
+                                properties: {
+                                    name: { type: "string" },
+                                    relation: { type: "string" },
+                                    note: { type: "string" },
+                                    activity_log: { type: "string" }
+                                }
+                            },
+                            add_memory_item: {
+                                type: "object",
+                                properties: {
+                                    text: { type: "string" },
+                                    tag: { type: "string" }
+                                }
+                            }
+                        }
+                    },
+                    self_decision: {
+                        type: "object",
+                        properties: {
+                            want_to_do: { type: "string", enum: ["sleep", "play", "think", "observe", "chat_offer", "nothing"] },
+                            reason: { type: "string" }
+                        }
+                    }
+                },
+                required: ["internal_thought", "action", "speech_text", "emotion_to_show"]
+            };
+        }
+
+        // Chhota schema — SIRF background/silent-observe calls ke liye. Games/roast-battle/
+        // task-engine/time-capsule jaisi fields yahan nahi chahiye, isse schema bhi halka rehta hai.
+        function getResponseSchemaLight() {
+            return {
+                type: "object",
+                properties: {
+                    internal_thought: { type: "string" },
+                    action: { type: "string", enum: ["speak", "silent"] },
+                    speech_text: { type: "string" },
+                    emotion_to_show: { type: "string", enum: ["normal", "happy", "sad", "surprised", "thinking", "sleeping", "bored", "confused", "laughing", "smirk", "shy", "annoyed", "curious", "love", "winking", "sleepy", "angry"] },
+                    observed_dress: { type: "string" },
+                    detected_mood: { type: "string", enum: ["happy", "sad", "stressed", "tired", "angry", "neutral", "excited", "bored", "unknown"] },
+                    detected_activity: { type: "string", enum: ["studying", "working", "gaming", "phone", "eating", "idle", "away", "other", "unknown"] },
+                    user_present: { type: "boolean" },
+                    memory_updates: {
+                        type: "object",
+                        properties: {
+                            add_memory_item: {
+                                type: "object",
+                                properties: {
+                                    text: { type: "string" },
+                                    tag: { type: "string" }
+                                }
+                            }
+                        }
+                    }
+                },
+                required: ["internal_thought", "action", "speech_text", "emotion_to_show"]
+            };
+        }
+
+        /* ================= 5. SMART CAMERA ENGINE (Battery Saver + Permission Fallback) ================= */
+        async function takeSnapshot() {
+            if (!cameraAvailable) return null;
+            let stream = null;
+            try {
+                camIndicator.classList.add('cam-active');
+                // Ab photo bahut kam baar li jaati hai (sirf genuine need pe), isliye resolution/quality
+                // badha di — AI ko ekdam clear image milegi.
+                stream = await navigator.mediaDevices.getUserMedia({ video: { width: 960, height: 720, facingMode: "user" } });
+                video.srcObject = stream;
+                await new Promise(resolve => { video.onloadedmetadata = resolve; video.play(); });
+                await new Promise(r => setTimeout(r, 600)); // auto-focus settle
+
+                const ctx = canvas.getContext('2d');
+                canvas.width = 960; canvas.height = 720;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const base64Image = canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
+
+                stream.getTracks().forEach(t => t.stop());
+                stream = null;
+                camIndicator.classList.remove('cam-active');
+                logActivity('📷 Photo li gayi (background check).', 'cam');
+                return base64Image;
+            } catch (err) {
+                console.error("Camera error:", err);
+                if (stream) stream.getTracks().forEach(t => t.stop());
+                camIndicator.classList.remove('cam-active');
+                if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError' || err.name === 'NotFoundError' || err.name === 'NotReadableError')) {
+                    cameraAvailable = false;
+                    camFixBtn.style.display = 'inline-block';
+                    updateStatus("Camera off hai — dobara on karne ke liye button dabao.");
+                }
+                logActivity('⚠️ Camera error: ' + safeStr(err && err.name), 'error');
+                return null;
+            }
+        }
+
+        async function retryCamera() {
+            camFixBtn.style.display = 'none';
+            cameraAvailable = true;
+            const test = await takeSnapshot();
+            if (!test) {
+                updateStatus("Camera abhi bhi blocked hai — browser settings me allow karo.");
+            } else {
+                updateStatus("Camera wapas on! ✓");
+            }
+        }
+        /* ================= 6. AI CALL QUEUE (Race-Condition Fix) ================= */
+        function enqueueCall(userText, opts = {}) {
+            aiQueue.push({ userText, opts });
+            processQueue();
+        }
+
+        async function processQueue() {
+            if (isProcessing) return;
+            if (isOffline) return; // net wapas aane par onlineHandler queue resume kar dega
+            const job = aiQueue.shift();
+            if (!job) return;
+
+            // Agar isi waqt aur bhi mergeable jobs pending hain (photo/background wale nahi),
+            // unhe isi call mein combine kar do — taaki Buddy sabka jawab EK hi natural reply
+            // mein de, alag-alag "Buddy bola" turns mein nahi.
+            const isMergeable = (j) => !j.opts.base64Image && !j.opts.background;
+            let mergedText = job.userText;
+            let mergedOpts = { ...job.opts };
+            if (isMergeable(job)) {
+                while (aiQueue.length > 0 && isMergeable(aiQueue[0])) {
+                    const next = aiQueue.shift();
+                    mergedText += `\n\n---\n${next.userText}`;
+                    if (next.opts.isSystemOverride) mergedOpts.isSystemOverride = true;
+                }
+                if (mergedText !== job.userText) {
+                    mergedText = `[SYSTEM: Neeche ek se zyada cheezein ek saath aayi hain — sabka jawab jodkar EK hi natural reply mein do, alag-alag mat bolo.]\n\n${mergedText}`;
+                }
+            }
+
+            isProcessing = true;
+            try {
+                await callAIDirect(mergedText, mergedOpts);
+            } finally {
+                isProcessing = false;
+                if (aiQueue.length > 0 && !isOffline) processQueue();
+            }
+        }
+
+        function clearQueue() { aiQueue.length = 0; }
+
+        // --- v3: connectivity handlers ---
+        window.addEventListener('offline', () => {
+            isOffline = true;
+            logActivity('📶 Net chala gaya — queue pause.', 'system');
+            if (!isSpeaking) updateStatus("Offline ho — net wapas aate hi resume.");
+        });
+        window.addEventListener('online', () => {
+            isOffline = false;
+            logActivity('📶 Net wapas — queue resume.', 'system');
+            processQueue();
+        });
+
+        /* ================= 7. THE API CALLER (gemini-2.5-flash + Structured JSON) ================= */
+        // Network + retry ka poora kaam yahan isolated hai — sirf FETCH level pe retry hota hai.
+        // Isse ek hi logical call (user-message log + bumpApiCount + memory-context) sirf EK baar
+        // hoti hai, chahe network me 429/500 ki wajah se 3 baar tak retry karna pade.
+        async function fetchGeminiWithRetry(body, modelName, background) {
+            const maxRetries = 3;
+            let retryCount = 0;
+            while (true) {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${API_KEY}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await response.json();
+
+                if (!data.error) return data;
+
+                console.error("API Error:", data.error);
+                logActivity('⚠️ API error: ' + safeStr(data.error.message).slice(0, 80) + ' (code ' + safeStr(data.error.code) + ')', 'error');
+
+                const errBlob = safeStr(data.error.status) + ' ' + JSON.stringify(data.error.errors || '') + ' ' + safeStr(data.error.message);
+                const is429 = data.error.code === 429;
+                const isServerError = data.error.code === 500 || data.error.code === 503 || /INTERNAL|UNAVAILABLE|backendError/i.test(errBlob);
+
+                // Google genuine per-minute rate-limits attach a RetryInfo detail with a retryDelay
+                // (e.g. "20s"). Agar ye nahi hai, ya message billing/plan ka zikr karta hai, toh ye
+                // ek HARD quota-exhausted block hai (daily/monthly limit ya billing hi off) — chhoti
+                // backoff se retry karne ka koi fayda nahi.
+                const retryInfo = (data.error.details || []).find(d => /RetryInfo/i.test(safeStr(d && d['@type'])));
+                const isHardQuota = is429 && (!retryInfo || /billing|plan/i.test(errBlob));
+
+                if (isHardQuota) {
+                    pauseApiCalls(15 * 60000, 'quota/billing exhausted (429, koi retry-hint nahi) — 15 min sab calls pause');
+                    data.__paused = true;
+                    return data;
+                }
+
+                if ((is429 || isServerError) && retryCount < maxRetries) {
+                    let waitMs;
+                    if (retryInfo && retryInfo.retryDelay) {
+                        waitMs = (parseFloat(retryInfo.retryDelay) || 3) * 1000; // Google ne jitna bola utna hi ruko
+                    } else {
+                        const base = is429 ? 3000 : 1000;
+                        waitMs = base * Math.pow(2, retryCount); // exponential-ish backoff: 1s/3s, 3s/6s, 7s/12s
+                    }
+                    logActivity(`🔁 ${is429 ? 'Rate-limit' : 'Server error'} — ${Math.round(waitMs / 1000)}s baad retry (${retryCount + 1}/${maxRetries})...`, 'system');
+                    if (!background) updateStatus(is429 ? "Thoda busy hai — retry..." : "Server glitch — retry...");
+                    await new Promise(r => setTimeout(r, waitMs));
+                    retryCount++;
+                    continue;
+                }
+
+                // Na rate-limit hai na server error — schema rejection jaisa kuch non-transient issue ho sakta hai.
+                if (useResponseSchema && !is429 && !isServerError) data.__nonTransientSchemaIssue = true;
+                return data;
+            }
+        }
+
+        async function callAIDirect(userText, opts = {}) {
+            const { isSystemOverride = false, base64Image = null, background = false } = opts;
+
+            if (muteMinutesRemaining > 0 && !isSystemOverride) {
+                updateStatus(`Muted for ${muteMinutesRemaining} more mins.`);
+                return;
+            }
+
+            // Offline check — net gone toh call na kare, canned line bolo instead
+            if (isOffline) {
+                if (!background && !isSystemOverride) {
+                    setExpression('sad');
+                    await speak(CANNED_NET_LINES[Math.floor(Math.random() * CANNED_NET_LINES.length)]);
+                }
+                logActivity('📶 Call skip — offline hai.', 'system');
+                return;
+            }
+
+            // Circuit breaker — quota/billing hard-exhausted hone pe kuch der sab calls
+            // (background samet) skip, taaki har trigger apna retry-storm na chalaye.
+            if (isApiPaused()) {
+                if (!background && !isSystemOverride) updateStatus("Thodi der ruko — quota cooldown chal raha hai.");
+                logActivity('⏸️ Call skip — API abhi paused hai (quota cooldown).', background ? 'cam' : 'system');
+                return;
+            }
+
+            // Background photo-checks (idle/sleep observation) should stay visually "normal" —
+            // thinking face sirf tab dikhega jab yeh ek real conversation turn ho.
+            if (!background) {
+                setExpression('thinking');
+                updateStatus("Thinking...");
+            }
+            logActivity((background ? '👀 [Background] ' : isSystemOverride ? '🔧 [System] ' : '🗣️ [User] ') + safeStr(userText).slice(0, 100) + (base64Image ? ' 📷' : ''), background ? 'cam' : isSystemOverride ? 'system' : 'user');
+
+            // v3: build semantic memory context for this call
+            await buildMemoryContext(userText);
+            bumpApiCount();
+
+            // Background/silent-observe calls ek halka model + chhota prompt + chhota schema use
+            // karte hain (alag quota bucket bhi hota hai) — real conversation ka full personality
+            // context yahan zaroori nahi, sirf photo dekh ke silent/log-worthy decision leni hai.
+            const modelName = background ? LIGHT_MODEL_NAME : MODEL_NAME;
+            let parts = [{ "text": (background ? getSystemPromptLight() : getSystemPrompt()) + "\n\n═══ INPUT ═══\n" + userText }];
+            if (base64Image) parts.push({ "inline_data": { "mime_type": "image/jpeg", "data": base64Image } });
+
+            const body = { "contents": [{ "parts": parts }] };
+            if (useResponseSchema) {
+                body.generationConfig = {
+                    response_mime_type: "application/json",
+                    response_schema: background ? getResponseSchemaLight() : getResponseSchema(),
+                    thinkingConfig: { includeThoughts: false }
+                };
+            }
+
+            let data;
+            try {
+                data = await fetchGeminiWithRetry(body, modelName, background);
+            } catch (error) {
+                console.error(error);
+                if (!background) { setExpression('sad'); await speak("Network me problem hai boss."); }
+                logActivity('⚠️ Network/JS error: ' + safeStr(error && error.message).slice(0, 90), 'error');
+                return;
+            }
+
+            // API-level error (model not found / quota / schema rejected) — yahan koi retry NAHI,
+            // retry sirf fetchGeminiWithRetry ke andar ho chuka hota hai.
+            if (data.error) {
+                // Schema-related non-transient issue — ek-baari fallback: schema off karke seedha retry.
+                // Ye quota/rate-limit se alag hai (rare, aur ek dafa ke baad useResponseSchema hamesha
+                // ke liye false ho jaata hai, isliye is path pe dobara nahi aayega).
+                if (data.__nonTransientSchemaIssue && useResponseSchema) {
+                    useResponseSchema = false;
+                    return callAIDirect(userText, opts);
+                }
+                if (!background) {
+                    setExpression('sad');
+                    await speak(data.__paused
+                        ? "Boss, thodi der rukna padega — API ka quota khatam ho gaya hai."
+                        : "API me dikkat hai boss — " + safeStr(data.error.message).slice(0, 80));
+                }
+                return;
+            }
+
+            // Gemma models sometimes emit a "thought" reasoning part BEFORE the real
+            // answer part (even when includeThoughts:false is requested — known model
+            // quirk). Skip any part flagged thought:true and use the real answer part(s).
+            const allParts = data?.candidates?.[0]?.content?.parts || [];
+            let rawJSONText = allParts
+                .filter(p => !p.thought)
+                .map(p => safeStr(p.text))
+                .join('')
+                .trim();
+            // Fallback: if every part was somehow flagged as thought, just use the last part.
+            if (!rawJSONText && allParts.length > 0) {
+                rawJSONText = safeStr(allParts[allParts.length - 1].text).trim();
+            }
+            if (!rawJSONText) {
+                console.error("Empty AI response:", data);
+                if (!background) { setExpression('sad'); updateStatus("AI ne khaali jawab diya."); }
+                logActivity('⚠️ AI ne khaali jawab diya.', 'error');
+                return;
+            }
+
+            rawJSONText = rawJSONText.replace(/```json/gi, '').replace(/```/gi, '').trim();
+
+            let json;
+            try {
+                json = JSON.parse(rawJSONText);
+            } catch (pe) {
+                // extract first {...} block as last resort
+                const m = rawJSONText.match(/\{[\s\S]*\}/);
+                if (m) { try { json = JSON.parse(m[0]); } catch (e2) { json = null; } }
+            }
+            if (!json) {
+                console.error("JSON parse fail:", rawJSONText);
+                if (!background) { setExpression('sad'); updateStatus("AI ka jawab samajh nahi aaya."); }
+                logActivity('⚠️ AI ka jawab samajh nahi aaya (JSON parse fail).', 'error');
+                return;
+            }
+
+            // AI ne khud decide kiya ki is sawal ka jawab dene ke liye dekhna zaroori hai —
+            // poora camera control AI ke paas hai, koi fixed keyword-list nahi. Ek genuine
+            // follow-up call karte hain, is baar photo ke saath, taaki asli jawab mil sake.
+            if (json.request_photo === true && !background && !base64Image && !opts._photoRoundDone) {
+                await executeAICommands(json, userText); // chhota filler bol sakta hai ("Ek second, dekhta hu...")
+                logActivity('📷 AI ne khud photo maangi — camera on kar raha hu.', 'cam');
+                const photo = await takeSnapshot();
+                if (!photo) return; // camera na mile toh filler jawab hi final rah jaata hai
+                return callAIDirect(userText + "\n[PHOTO ATTACHED — ISI SAWAL KA FOLLOW-UP HAI]", { ...opts, base64Image: photo, _photoRoundDone: true });
+            }
+
+            await executeAICommands(json, userText);
+        }
+
+        /* ================= 8. JSON EXECUTION ENGINE ================= */
+        async function executeAICommands(json, userText = "") {
+            console.log("AI Internal:", json);
+            json = json || {};
+            const sysCmds = json.system_commands || {};
+            const memUpd = json.memory_updates || {};
+            const selfDec = json.self_decision || {};
+
+            // --- System commands ---
+            if (safeNum(sysCmds.mute_system_for_minutes) > 0) {
+                muteMinutesRemaining = Math.min(safeNum(sysCmds.mute_system_for_minutes), 720);
+                mouth.classList.add('muted-visual');
+                // Persist to Firebase so reload/app-restart mute nahi toot-ta
+                db.ref('buddy/system/muteUntil').set(Date.now() + muteMinutesRemaining * 60000);
+                updateStatus(`Muted for ${muteMinutesRemaining} mins.`);
+                renderMuteStatus();
+                logActivity(`🤫 Mute ho gaya ${muteMinutesRemaining} minute ke liye.`, 'system');
+            }
+
+            if (sysCmds.add_task && safeStr(sysCmds.add_task.task)) {
+                addTask(sysCmds.add_task);
+            }
+
+            if (safeStr(sysCmds.complete_task_id) && savedTasks[safeStr(sysCmds.complete_task_id)]) {
+                const t = savedTasks[safeStr(sysCmds.complete_task_id)];
+                t.done = true;
+                db.ref('buddy/tasks/' + safeStr(sysCmds.complete_task_id)).set(t);
+                logActivity('✅ Task complete hua: ' + safeStr(t.task).slice(0, 80), 'task');
+            }
+
+            if (safeStr(sysCmds.mute_task_id) && savedTasks[safeStr(sysCmds.mute_task_id)]) {
+                const t = savedTasks[safeStr(sysCmds.mute_task_id)];
+                t.muted = true;
+                db.ref('buddy/tasks/' + safeStr(sysCmds.mute_task_id)).set(t);
+                logActivity('🔇 Task ke reminders band kiye (user ne mana kiya): ' + safeStr(t.task).slice(0, 80) + ' — is baar ' + (t.timesReminded || 0) + ' reminder de chuke the', 'task');
+            }
+
+            // --- Memory updates (disciplined) ---
+            if (safeStr(memUpd.new_fact)) {
+                memFacts = trimTo(memFacts + " | " + safeStr(memUpd.new_fact), MEM_LIMITS.facts);
+                db.ref('buddy/memory/facts').set(memFacts);
+                maybeSummarize('facts');
+                logActivity('🧠 Naya fact yaad rakha: ' + safeStr(memUpd.new_fact).slice(0, 80), 'memory');
+            }
+            if (safeStr(memUpd.learned_habit)) {
+                memHabits = trimTo(memHabits + " | " + safeStr(memUpd.learned_habit), MEM_LIMITS.habits);
+                db.ref('buddy/memory/habits').set(memHabits);
+                maybeSummarize('habits');
+                logActivity('🔁 Habit note ki: ' + safeStr(memUpd.learned_habit).slice(0, 80), 'memory');
+            }
+            if (safeStr(memUpd.add_new_rule)) {
+                memRules = trimTo(memRules + " | " + safeStr(memUpd.add_new_rule), MEM_LIMITS.rules);
+                db.ref('buddy/memory/rules').set(memRules);
+                maybeSummarize('rules');
+                logActivity('📏 Naya rule add hua: ' + safeStr(memUpd.add_new_rule).slice(0, 80), 'memory');
+            }
+            if (safeStr(memUpd.observation_note)) {
+                memHourlySummary = trimTo(memHourlySummary + " " + safeStr(memUpd.observation_note), MEM_LIMITS.hourlySummary);
+                db.ref('buddy/memory/hourlySummary').set(memHourlySummary);
+                logActivity('👀 Observation note: ' + safeStr(memUpd.observation_note).slice(0, 80), 'memory');
+                appendTimeline(safeStr(memUpd.observation_note), 'observation');
+                addMemoryItem(safeStr(memUpd.observation_note), 'observation');
+            }
+
+            // v3: structured profile_update
+            if (memUpd.profile_update && memUpd.profile_update.field) {
+                applyProfileUpdate(memUpd.profile_update);
+            }
+            // v3.2: structured people directory (friends/family — name, relation, episodic log)
+            if (memUpd.person_update && safeStr(memUpd.person_update.name)) {
+                upsertPerson(memUpd.person_update);
+            }
+            // v3: discrete memory item (semantic retrieval)
+            if (memUpd.add_memory_item && safeStr(memUpd.add_memory_item.text)) {
+                addMemoryItem(safeStr(memUpd.add_memory_item.text), safeStr(memUpd.add_memory_item.tag) || 'fact');
+            }
+            // ALSO mirror new_fact / learned_habit into memoryItems + timeline
+            if (safeStr(memUpd.new_fact)) {
+                addMemoryItem(safeStr(memUpd.new_fact), 'fact');
+                appendTimeline(safeStr(memUpd.new_fact), 'fact');
+            }
+            if (safeStr(memUpd.learned_habit)) {
+                addMemoryItem(safeStr(memUpd.learned_habit), 'habit');
+            }
+
+            // v3: new system_commands
+            if (safeStr(sysCmds.launch_game) === 'tic_tac_toe') {
+                launchTicTacToe();
+            }
+            if (tttActive && !tttGameOver && typeof sysCmds.ttt_move === 'number') {
+                applyBuddyTTTMove(safeNum(sysCmds.ttt_move, -1));
+            }
+            if (sysCmds.start_roast_battle === true) {
+                gameMode = 'roast_battle';
+                roastScore = { user: 0, buddy: 0 };
+                roastRound = 1;
+                logActivity('🔥 Roast battle mode ON.', 'system');
+            }
+            if (safeStr(sysCmds.roast_battle_score) && gameMode === 'roast_battle') {
+                const w = safeStr(sysCmds.roast_battle_score);
+                if (w === 'user' || w === 'buddy') {
+                    roastScore[w] = (roastScore[w] || 0) + 1;
+                    roastRound++;
+                    logActivity(`🔥 Roast round done — winner: ${w} (User ${roastScore.user}-${roastScore.buddy} Buddy)`, 'system');
+                    if (roastRound > 5) triggerRoastEnd();
+                }
+            }
+            if (sysCmds.end_roast_battle === true && gameMode === 'roast_battle') {
+                triggerRoastEnd();
+            }
+            if (safeStr(sysCmds.set_daily_challenge)) {
+                dailyChallenge = { text: safeStr(sysCmds.set_daily_challenge), date: todayKey(), done: false };
+                db.ref('buddy/dailyChallenge').set(dailyChallenge);
+                logActivity('🎯 Naya daily challenge: ' + dailyChallenge.text.slice(0, 80), 'task');
+            }
+            if (sysCmds.complete_challenge === true && dailyChallenge && dailyChallenge.date === todayKey() && !dailyChallenge.done) {
+                dailyChallenge.done = true;
+                db.ref('buddy/dailyChallenge').set(dailyChallenge);
+                bumpChallengeStreak();
+                launchConfetti();
+                logActivity('🎉 Challenge complete! Streak: ' + challengeStreak, 'task');
+            }
+            if (sysCmds.add_time_capsule && safeStr(sysCmds.add_time_capsule.message)) {
+                addTimeCapsule(sysCmds.add_time_capsule);
+            }
+            if (sysCmds.trigger_easter_egg === true) {
+                runEasterEgg();
+            }
+            if (sysCmds.search_memory && (safeStr(sysCmds.search_memory.query) || safeStr(sysCmds.search_memory))) {
+                // next-turn search: attach top-k to memory context for the NEXT call
+                // v3.2: ab folder-aware hai — agar AI ne folder bataya (jaise "friends"), sirf
+                // usi folder ke andar dhoondte hain pehle, poore pool me nahi.
+                const isObj = typeof sysCmds.search_memory === 'object';
+                window._pendingMemorySearch = isObj ? safeStr(sysCmds.search_memory.query) : safeStr(sysCmds.search_memory);
+                window._pendingMemorySearchFolder = isObj ? safeStr(sysCmds.search_memory.folder) : '';
+                logActivity('🔍 Memory search queued' + (window._pendingMemorySearchFolder ? ` [folder: ${window._pendingMemorySearchFolder}]` : '') + ': ' + window._pendingMemorySearch.slice(0, 60), 'memory');
+            }
+            if (sysCmds.quick_unmute === true && muteMinutesRemaining > 0) {
+                muteMinutesRemaining = 0;
+                db.ref('buddy/system/muteUntil').set(0);
+                mouth.classList.remove('muted-visual');
+                renderMuteStatus();
+                logActivity('🔇 Quick-unmute triggered.', 'system');
+            }
+
+            // --- Habit & mood logging ---
+            if (safeStr(json.detected_mood) && json.detected_mood !== 'unknown') {
+                const k = todayKey();
+                if (!moodLog[k]) moodLog[k] = {};
+                moodLog[k][json.detected_mood] = (moodLog[k][json.detected_mood] || 0) + 1;
+                db.ref('buddy/moodLog/' + k).set(moodLog[k]);
+                logActivity('😊 Mood detect hua: ' + safeStr(json.detected_mood), 'mood');
+            }
+            if (safeStr(json.observed_dress)) {
+                logDress(safeStr(json.observed_dress));
+            }
+            if (safeStr(json.detected_activity) && json.detected_activity !== 'unknown') {
+                lastDetectedActivity = safeStr(json.detected_activity);
+                studyStreak = lastDetectedActivity === 'studying' ? studyStreak + 1 : 0;
+            }
+            if (json.user_present === false) {
+                db.ref('buddy/lastEmptyChair').set(Date.now());
+            }
+            // Stranger privacy mode — AI ne naya insaan mention kiya ho (thought/note me) toh 15 min reserved mode
+            const strangerProbe = (safeStr(json.internal_thought) + ' ' + safeStr(memUpd.observation_note)).toLowerCase();
+            if (json.user_present === true && /stranger|naya insaan|naye insaan|unknown person|kaun hai/.test(strangerProbe)) {
+                window._strangerDetectedAt = Date.now();
+                logActivity('🕵️ Stranger detect — personal facts 15 min ke liye reserved.', 'system');
+            }
+
+            // --- Self decision (pet behaviour) ---
+            handleSelfDecision(selfDec, sysCmds);
+
+            // --- Speak or stay silent ---
+            const speechText = safeStr(json.speech_text).trim();
+            if (json.action === "speak" && speechText) {
+                isSleeping = false;
+                setExpression(safeStr(json.emotion_to_show) || 'normal');
+                const delay = Math.min(Math.max(safeNum(json.thinking_delay_ms, 0), 0), 2500);
+                if (delay > 0) {
+                    updateStatus("Hmm...");
+                    await new Promise(r => setTimeout(r, delay));
+                }
+                pushHistory('buddy', speechText);
+                lastBuddySpokeAt = Date.now();
+                awaitingUserReply = true;
+                logActivity('💬 Buddy bola: ' + speechText.slice(0, 100), 'reply');
+                // speak() ab poore audio (TTS fetch + playback) khatam hone tak await hota hai —
+                // mic khudba-khud sahi time pe on hota hai (speak() ke andar hi scheduleMicResume
+                // call hoti hai), isliye yahan alag se koi jaldi wala scheduleMicResume nahi chahiye.
+                await speak(speechText, safeStr(json.emotion_to_show), {
+                    pitch: safeNum(json.pitch, NaN),
+                    rate: safeNum(json.rate, NaN),
+                    whisper: json.whisper_mode === true
+                });
+            } else {
+                setExpression(safeStr(json.emotion_to_show) || 'normal');
+                const thought = safeStr(json.internal_thought);
+                updateStatus(thought || "...");
+                logActivity('🤔 Buddy chup raha. Thought: ' + (thought || '—').slice(0, 90), 'system');
+                if (thought.toLowerCase().includes("so jao") || json.emotion_to_show === "sleeping") {
+                    isSleeping = true; setExpression('sleeping');
+                }
+                if (conversationActive) scheduleMicResume(1500);
+            }
+        }
+
+        // --- Anti-spam probability + cooldown gate ---
+        function commentAllowed(type, cooldownMinutes, probability) {
+            const now = Date.now();
+            const last = lastCommentAt[type] || 0;
+            if (now - last < cooldownMinutes * 60000) return false;
+            if (Math.random() > probability) return false;
+            lastCommentAt[type] = now;
+            return true;
+        }
+
+        // --- Memory trimmer (hard cap) ---
+        function trimTo(str, max) {
+            str = safeStr(str);
+            if (str.length <= max) return str;
+            const parts = str.split(' | ');
+            while (parts.length > 1 && parts.join(' | ').length > max) parts.shift();
+            return parts.join(' | ').slice(-max);
+        }
+
+        // --- Memory summarizer (AI compresses when a category is ~full) ---
+        const summarizing = {};
+        function maybeSummarize(category) {
+            const content = category === 'facts' ? memFacts : category === 'habits' ? memHabits : memRules;
+            const limit = MEM_LIMITS[category];
+            if (content.length < limit * 0.85 || summarizing[category] || isApiPaused()) return;
+            summarizing[category] = true;
+            const prompt = `[SYSTEM MEMORY SUMMARIZER]: Neeche user ki "${category}" memory limit ke paas hai. ` +
+                `Isko adhe size tak compress karke ek concise Hinglish summary do — saari important details bachake. Sirf compressed text likho, koi JSON nahi.\n\n${content}`;
+            fetch(`https://generativelanguage.googleapis.com/v1beta/models/${LIGHT_MODEL_NAME}:generateContent?key=${API_KEY}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+            })
+            .then(r => r.json())
+            .then(data => {
+                const summary = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (summary && summary.length > 20) {
+                    const clean = summary.trim().slice(0, limit);
+                    if (category === 'facts') { memFacts = clean; db.ref('buddy/memory/facts').set(clean); }
+                    else if (category === 'habits') { memHabits = clean; db.ref('buddy/memory/habits').set(clean); }
+                    else { memRules = clean; db.ref('buddy/memory/rules').set(clean); }
+                    console.log(`Memory '${category}' summarized:`, clean.length, 'chars');
+                }
+            })
+            .catch(e => console.error("Summarize fail:", e))
+            .finally(() => { summarizing[category] = false; });
+        }
+
+        // --- Short-term history ---
+        function pushHistory(role, text) {
+            chatHistory.push({ role, text: safeStr(text).slice(0, 300) });
+            if (chatHistory.length > HISTORY_MAX) chatHistory.shift();
+        }
+        /* ================= 9. TASK / REMINDER ENGINE (Progressive, Never Skips) ================= */
+        // v3.1: FIX — pehle sirf strict 24-hour "HH:MM" string accept hoti thi, aur "X minute baad"
+        // jaisi relative request ke liye AI ko khud current time dekh ke ganit karna padta tha (error-prone,
+        // AM/PM format bhej de toh silently fail ho jaata tha, koi error kabhi dikhta hi nahi tha).
+        // Ab do reliable raaste hain:
+        //   (a) deadline_minutes_from_now (number) — relative reminders ke liye, AI ko koi clock-math
+        //       karne ki zaroorat nahi, seedha "kitne minute baad" bhejo, code khud calculate karta hai.
+        //   (b) deadline (string) — absolute clock-time ke liye, ab 24-hour ("14:30") AUR 12-hour
+        //       AM/PM ("2:30 PM", "2:30pm", "02:30 PM") dono formats accept karta hai.
+        // Agar dono hi missing/invalid hon, silently fail nahi hota — activity log me clear error aata hai.
+        function parseFlexibleTime(str) {
+            str = safeStr(str).trim();
+            // 24-hour: "14:30", "9:05"
+            let m = str.match(/^(\d{1,2}):(\d{2})$/);
+            if (m) {
+                const h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+                if (h >= 0 && h <= 23 && mi >= 0 && mi <= 59) return { hour: h, minute: mi };
+                return null;
+            }
+            // 12-hour with AM/PM: "2:30 PM", "2:30pm", "02:30 A.M.", "12:00am"
+            m = str.match(/^(\d{1,2}):(\d{2})\s*([APap])\.?[Mm]\.?$/);
+            if (m) {
+                let h = parseInt(m[1], 10);
+                const mi = parseInt(m[2], 10);
+                const isPM = /p/i.test(m[3]);
+                if (h < 1 || h > 12 || mi < 0 || mi > 59) return null;
+                if (h === 12) h = 0; // 12 AM = 00, 12 PM handled by +12 below
+                if (isPM) h += 12;
+                return { hour: h, minute: mi };
+            }
+            return null;
+        }
+
+        function addTask(t) {
+            const task = safeStr(t.task);
+            if (!task) return false;
+
+            const now = new Date();
+            let dl = null;
+
+            // Path (a) — relative duration, deterministic, no string-parsing risk at all.
+            const relMin = safeNum(t.deadline_minutes_from_now, NaN);
+            if (!isNaN(relMin) && relMin > 0) {
+                dl = new Date(now.getTime() + Math.round(relMin) * 60000);
+            } else {
+                // Path (b) — absolute clock time, now tolerant of 12h/24h formats.
+                const deadlineStr = safeStr(t.deadline);
+                const parsed = parseFlexibleTime(deadlineStr);
+                if (!parsed) {
+                    logActivity(`⚠️ Task "${task}" save nahi hua — deadline samajh nahi aayi ("${deadlineStr || 'khaali'}"). AI ko deadline_minutes_from_now ya sahi HH:MM format use karna chahiye tha.`, 'error');
+                    return false;
+                }
+                dl = new Date(now.getFullYear(), now.getMonth(), now.getDate(), parsed.hour, parsed.minute);
+                if (dl.getTime() <= now.getTime()) dl.setDate(dl.getDate() + 1); // time passed today → tomorrow
+            }
+
+            const warnOffsets = [10, 30, 60]; // escalating warn points (minutes before)
+            const warnTs = warnOffsets.map(o => dl.getTime() - o * 60000).filter(ts => ts > now.getTime());
+
+            const id = 'task_' + Date.now();
+            const deadlineHumanFallback = dl.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) +
+                (dl.getDate() !== now.getDate() ? ' (kal)' : '');
+            const entry = {
+                id, task,
+                deadlineTs: dl.getTime(),
+                deadlineHuman: safeStr(t.deadline_human) || deadlineHumanFallback,
+                nature: safeStr(t.nature),
+                selfFulfilling: !!t.self_fulfilling,
+                warnTs, warnIdx: 0,
+                stage: 0, // 0=normal, 1=warned, 2=urgent, 3=overdue
+                done: false, remindedFinal: false,
+                muted: false, timesReminded: 0,
+                createdAt: now.getTime()
+            };
+            savedTasks[id] = entry;
+            db.ref('buddy/tasks/' + id).set(entry);
+            logActivity('📝 Naya task set hua: "' + task + '" (deadline ' + entry.deadlineHuman + ')', 'task');
+            return true;
+        }
+
+        // v3: sanity check for AI-provided deadline strings (accepts both 12h and 24h now)
+        function isValidDeadline(str) {
+            return parseFlexibleTime(str) !== null;
+        }
+
+        // Task checker — har 1 minute, MUTE ko bypass karta hai (system override)
+        function checkTasks() {
+            if (conversationActive) return; // live baat-cheet chal rahi hai — reminder is baad rok do, agle 1-min tick pe phir try hoga
+            const now = Date.now();
+            for (const id of Object.keys(savedTasks)) {
+                const t = savedTasks[id];
+                // muted: user ne khud "bas mat bolo" bola tha — ab is task ke liye koi
+                // reminder (warning/deadline/overdue) kabhi nahi firega, jab tak dobara
+                // add na ho. Task delete nahi hota, bas chup ho jaata hai.
+                if (!t || t.done || t.muted) continue;
+
+                // Progressive warnings
+                if (t.warnIdx < (t.warnTs || []).length && now >= t.warnTs[t.warnIdx]) {
+                    t.warnIdx++; t.stage = 1; t.timesReminded = (t.timesReminded || 0) + 1;
+                    db.ref('buddy/tasks/' + id).set(t);
+                    const minsLeft = Math.max(1, Math.round((t.deadlineTs - now) / 60000));
+                    enqueueCall(`[SYSTEM OVERRIDE TASK id:${id}]: "${t.task}" ka time ${minsLeft} minute me aa raha hai (deadline: ${t.deadlineHuman}). Ye is task ke liye ${t.timesReminded}wa reminder hai. User ko halka se remind karo — daantna nahi abhi. Agar user pehle hi bol chuka hai "itna baar mat bolo"/"mat yaad dilao" jaisa kuch is task ke liye, toh mute_task_id: "${id}" bhejo aur kuch mat bolo. Nature: ${t.nature}`, { isSystemOverride: true });
+                    continue;
+                }
+
+                // Deadline hit — aggressive (action tasks) / content-delivery (self-fulfilling tasks)
+                if (!t.remindedFinal && now >= t.deadlineTs) {
+                    t.remindedFinal = true; t.stage = 2;
+                    if (t.selfFulfilling) {
+                        // Buddy khud is task ko "poora" karta hai (gaana/story/joke sunana) —
+                        // is waqt speak karna hi completion hai, isliye turant done mark karo.
+                        // Isse pehle ye bug tha: task kabhi "done" nahi hota tha (AI ke paas task id
+                        // hi nahi jaata tha complete_task_id bhejne ke liye), toh overdue-nagging loop
+                        // ISI cheez ko baar-baar bolta rehta tha gaana ho jaane ke baad bhi.
+                        t.done = true;
+                        db.ref('buddy/tasks/' + id).set(t);
+                        enqueueCall(`[SYSTEM OVERRIDE TASK DEADLINE — SELF-FULFILLING id:${id}]: "${t.task}" ka time ho gaya hai (${t.deadlineHuman}). Ye khud tumhara kaam hai (jaise gaana/story/joke sunana) — ISI waqt seedha wahi content de do speech_text me, koi daant/reminder nahi chahiye. Ye task ye response dene ke saath hi complete maana jaayega, dobara mention mat karna. Nature: ${t.nature}`, { isSystemOverride: true });
+                    } else {
+                        t.timesReminded = (t.timesReminded || 0) + 1;
+                        db.ref('buddy/tasks/' + id).set(t);
+                        enqueueCall(`[SYSTEM OVERRIDE TASK DEADLINE id:${id}]: "${t.task}" ka TIME HO GAYA (${t.deadlineHuman})! Ye is task ke liye ${t.timesReminded}wa reminder hai. User ko aggressively bolo ki ab jaana/karna hi hai. Agar user pehle hi mana kar chuka hai is task ke reminders ke liye, toh mute_task_id: "${id}" bhejo aur kuch mat bolo. Nature: ${t.nature}`, { isSystemOverride: true });
+                    }
+                    continue;
+                }
+
+                // Overdue nagging (first 4 quick nags har 15 min, phir rare mode — har 2.5 ghante ek yaad)
+                if (t.remindedFinal && now > t.deadlineTs) {
+                    t.nagCount = t.nagCount || 0;
+                    const lastNag = t.lastNagAt || 0;
+                    const inRareMode = t.nagCount >= 4;
+                    const interval = inRareMode ? 150 * 60000 : 15 * 60000;
+                    if (now - lastNag > interval) {
+                        t.nagCount++; t.lastNagAt = now; t.stage = 3; t.timesReminded = (t.timesReminded || 0) + 1;
+                        db.ref('buddy/tasks/' + id).set(t);
+                        const tone = inRareMode ? 'ek rare halka reminder do (annoying mat bano)' : 'thoda gussa/daant allowed';
+                        enqueueCall(`[SYSTEM OVERRIDE TASK OVERDUE id:${id}]: "${t.task}" abhi tak pending hai! Deadline ${t.deadlineHuman} thi. Ye is task ke liye ${t.timesReminded}wa reminder hai — agar user pehle hi mana kar chuka hai isko dobara mat bolne ke liye, toh mute_task_id: "${id}" bhejo aur kuch mat bolo. Nahi toh user ko phir se todo — ${tone}.`, { isSystemOverride: true });
+                    }
+                }
+            }
+        }
+
+        // "Abhi bata dena" instant request detect — bypass everything
+        function isInstantRequest(text) {
+            const t = safeStr(text).toLowerCase();
+            return /abhi (bata|bolo|bta)|turant bata|foran bata|jaldi bata|fatafat bata/.test(t);
+        }
+
+        /* ================= v3: STRUCTURED PROFILE + SEMANTIC MEMORY + TIMELINE + CAPSULES ================= */
+        function summarizeProfile() {
+            const p = userProfile || {};
+            const parts = [];
+            if (p.name) parts.push(`name: ${p.name}`);
+            if (p.school) parts.push(`school: ${p.school}`);
+            if (p.crush) parts.push(`crush: ${p.crush}`);
+            if (p.dailyRoutine) parts.push(`routine: ${p.dailyRoutine}`);
+            if (Array.isArray(p.goals) && p.goals.length) parts.push(`goals: ${p.goals.join(', ')}`);
+            if (Array.isArray(p.hobbies) && p.hobbies.length) parts.push(`hobbies: ${p.hobbies.join(', ')}`);
+            if (Array.isArray(p.friends) && p.friends.length) parts.push(`friends: ${p.friends.join(', ')}`);
+            if (Array.isArray(p.importantDates) && p.importantDates.length) parts.push(`important dates: ${p.importantDates.join(', ')}`);
+            return parts.length ? parts.join(' | ') : '(profile empty — dheere dheere fields bharo)';
+        }
+
+        function applyProfileUpdate(upd) {
+            const field = safeStr(upd.field);
+            const action = safeStr(upd.action).toLowerCase() || 'set';
+            const value = safeStr(upd.value).trim();
+            if (!field || !value) return;
+            if (!(field in userProfile)) return; // unknown field — skip
+            if (PROFILE_ARRAY_FIELDS.includes(field)) {
+                if (!Array.isArray(userProfile[field])) userProfile[field] = [];
+                if (action === 'remove') {
+                    userProfile[field] = userProfile[field].filter(x => safeStr(x).toLowerCase() !== value.toLowerCase());
+                } else {
+                    // add (default) — dedupe
+                    if (!userProfile[field].some(x => safeStr(x).toLowerCase() === value.toLowerCase())) {
+                        userProfile[field].push(value);
+                    }
+                }
+            } else {
+                userProfile[field] = value;
+            }
+            db.ref('buddy/profile').set(userProfile);
+            logActivity('🧠 Profile update: ' + field + ' ' + action + ' "' + value.slice(0, 40) + '"', 'memory');
+            appendTimeline(`profile ${field} ${action}: ${value}`, 'profile');
+        }
+
+        // v3.2: PEOPLE DIRECTORY — structured, episodic memory for named individuals (friends/
+        // family). Alag se isliye hai kyunki "Rahul ka birthday kab hai" jaisa sawal seedha
+        // lookup se answer ho sake, aur "kal Rahul ke saath bahar gaya tha" jaisi cheezein
+        // per-person timeline me track ho sakein — na ki ek flat text blob me kho jaayein.
+        function summarizePeople() {
+            const people = (userProfile && userProfile.people) || {};
+            const names = Object.keys(people);
+            if (names.length === 0) return '(koi naamzad dost/family member abhi tak note nahi hui)';
+            return names.map(name => {
+                const p = people[name];
+                const rel = p.relation ? ` (${p.relation})` : '';
+                const notes = p.notes ? ` | notes: ${p.notes}` : '';
+                const log = Array.isArray(p.log) && p.log.length
+                    ? ' | recent: ' + p.log.slice(-3).map(l => `[${new Date(l.ts).toLocaleDateString('en-IN')}] ${l.note}`).join('; ')
+                    : '';
+                return `${name}${rel}${notes}${log}`;
+            }).join('\n');
+        }
+
+        function upsertPerson(p) {
+            const name = safeStr(p.name).trim();
+            if (!name) return;
+            if (!userProfile.people || typeof userProfile.people !== 'object') userProfile.people = {};
+            const existing = userProfile.people[name] || { relation: '', notes: '', log: [], firstMentioned: Date.now() };
+            if (safeStr(p.relation)) existing.relation = safeStr(p.relation).slice(0, 60);
+            if (safeStr(p.note)) existing.notes = trimTo((existing.notes ? existing.notes + " | " : "") + safeStr(p.note), 300);
+            if (safeStr(p.activity_log)) {
+                existing.log = Array.isArray(existing.log) ? existing.log : [];
+                existing.log.push({ ts: Date.now(), note: safeStr(p.activity_log).slice(0, 150) });
+                if (existing.log.length > 10) existing.log.shift(); // per-person log bhi cap hai
+            }
+            existing.lastMentioned = Date.now();
+            userProfile.people[name] = existing;
+            db.ref('buddy/profile/people/' + name.replace(/[.#$\[\]\/]/g, '_')).set(existing);
+            logActivity('👤 Person update: ' + name + (p.activity_log ? ' — ' + safeStr(p.activity_log).slice(0, 60) : ''), 'memory');
+        }
+
+        function appendTimeline(text, tag) {
+            const key = todayKey();
+            const entry = { text: safeStr(text).slice(0, 200), tag: safeStr(tag) || 'note', ts: Date.now() };
+            db.ref('buddy/timeline/' + key).push(entry);
+        }
+
+        // Lightweight embedding: hash-based bag-of-words vector (no extra API call needed — fast + free)
+        // Cosine-similarity ke liye kaafi accurate hai chhote memory items ke bich.
+        // v3.2: Ab ye sirf FALLBACK hai — normal path embedTextReal() use karta hai (neeche).
+        function embedText(text) {
+            const v = new Array(128).fill(0);
+            const tokens = safeStr(text).toLowerCase().replace(/[^a-z0-9\s\u0900-\u097F]/g, ' ').split(/\s+/).filter(Boolean);
+            for (const t of tokens) {
+                let h = 0;
+                for (let i = 0; i < t.length; i++) h = ((h << 5) - h + t.charCodeAt(i)) | 0;
+                v[Math.abs(h) % 128] += 1;
+            }
+            // normalize
+            let mag = 0;
+            for (const x of v) mag += x * x;
+            mag = Math.sqrt(mag) || 1;
+            for (let i = 0; i < v.length; i++) v[i] /= mag;
+            return v;
+        }
+        function cosineSim(a, b) {
+            if (!a || !b || a.length !== b.length) return 0;
+            let s = 0;
+            for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+            return s;
+        }
+
+        // v3.2: REAL semantic embedding via Gemini's embedContent API. Isse "gaadi" aur "car"
+        // jaisa meaning-level match ho sakta hai, jo purana word-hash trick kabhi nahi kar sakta tha.
+        // Agar API fail ho jaaye (network/quota), purane local hash-embedding pe silently fallback
+        // hota hai — taaki memory-save/search feature kabhi poori tarah break na ho.
+        async function embedTextReal(text) {
+            const clean = safeStr(text).slice(0, 2000);
+            if (!clean) return embedText(clean);
+            try {
+                const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: 'models/' + EMBEDDING_MODEL,
+                        content: { parts: [{ text: clean }] },
+                        outputDimensionality: EMBED_DIM
+                    })
+                });
+                const data = await r.json();
+                const vals = (data && data.embedding && data.embedding.values) ||
+                             (data && Array.isArray(data.embeddings) && data.embeddings[0] && data.embeddings[0].values);
+                if (Array.isArray(vals) && vals.length === EMBED_DIM) return vals;
+                console.warn('Embedding API returned unexpected shape, falling back to local hash embed.', data);
+            } catch (e) {
+                console.error('Real embedding call failed, falling back to local hash embed:', e);
+            }
+            return embedText(clean); // fallback — feature kabhi crash nahi karega
+        }
+
+        // v3.2: Purane items jo abhi bhi 128-dim wale local-hash embedding se save hue the, unhe
+        // gradually real-embedding se upgrade karta hai — EK item per call (taaki koi quota-burst
+        // na ho), fire-and-forget. Chalta rehta hai jab tak sab items migrate na ho jaayein.
+        let migratingEmbedding = false;
+        async function migrateOneOldEmbeddingIfNeeded() {
+            if (migratingEmbedding) return;
+            const ids = Object.keys(memoryItems);
+            for (const id of ids) {
+                const it = memoryItems[id];
+                if (it && it.text && (!it.embedding || it.embedding.length !== EMBED_DIM)) {
+                    migratingEmbedding = true;
+                    try {
+                        const newVec = await embedTextReal(it.text);
+                        if (newVec.length === EMBED_DIM) {
+                            it.embedding = newVec;
+                            memoryItems[id] = it;
+                            db.ref('buddy/memoryItems/' + id + '/embedding').set(newVec);
+                            logActivity('🔄 Purani memory item real-embedding se upgrade hui: ' + safeStr(it.text).slice(0, 40), 'memory');
+                        }
+                    } catch (e) { console.error('Migration failed for', id, e); }
+                    migratingEmbedding = false;
+                    break; // ek hi item per call
+                }
+            }
+        }
+
+
+        async function addMemoryItem(text, tag) {
+            text = safeStr(text).slice(0, 240);
+            if (!text) return;
+            // dedupe last 30 items — agar same baat dobara boli gayi, naya item nahi banate,
+            // balki PURANE item ka "importance score" badha dete hain. Isse baar-baar mention
+            // hui cheez khud-ba-khud zyada "important" ban jaati hai (dekho evictLeastImportantIfOverCap).
+            const recentIds = Object.keys(memoryItems).slice(-30);
+            for (const rid of recentIds) {
+                const it = memoryItems[rid];
+                if (it && safeStr(it.text).toLowerCase() === text.toLowerCase()) {
+                    it.score = (it.score || 1) + 1;
+                    it.ts = Date.now(); // reinforcement pe "fresh" bhi ho jaata hai
+                    memoryItems[rid] = it;
+                    db.ref('buddy/memoryItems/' + rid).set(it);
+                    return;
+                }
+            }
+            const id = 'm_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+            const embedding = await embedTextReal(text); // real semantic embedding (Gemini embedContent)
+            const item = { text, tag: safeStr(tag) || 'fact', ts: Date.now(), embedding, score: 1 };
+            memoryItems[id] = item;
+            db.ref('buddy/memoryItems/' + id).set(item);
+            evictLeastImportantIfOverCap();
+        }
+
+        // v3.2: Smart eviction — pehle 200-cap hit hone pe hamesha sabse PURANA item hataya jaata
+        // tha, chahe wo kitna bhi important ho. Ab har item ka "effective score" nikalte hain
+        // (importance score minus age-decay) aur sabse KAM-important wala hatate hain — matlab
+        // ek baar-baar reinforce hui purani cheez ek naye one-off mention se zyada der tak tikti hai.
+        function evictLeastImportantIfOverCap() {
+            const ids = Object.keys(memoryItems);
+            const overBy = ids.length - 200;
+            if (overBy <= 0) return;
+            const now = Date.now();
+            const DECAY_PER_DAY = 0.05; // har din thoda importance kam hota hai agar dobara mention na ho
+            const ranked = ids.map(id => {
+                const it = memoryItems[id];
+                const ageDays = (now - (it.ts || now)) / 86400000;
+                return { id, effectiveScore: (it.score || 1) - ageDays * DECAY_PER_DAY };
+            }).sort((a, b) => a.effectiveScore - b.effectiveScore); // sabse kam-important pehle
+            for (let i = 0; i < overBy; i++) {
+                const rid = ranked[i].id;
+                delete memoryItems[rid];
+                db.ref('buddy/memoryItems/' + rid).remove();
+            }
+        }
+
+        async function buildMemoryContext(userText) {
+            const query = (window._pendingMemorySearch || '') + ' ' + safeStr(userText);
+            const folder = safeStr(window._pendingMemorySearchFolder || '').toLowerCase();
+            window._pendingMemorySearch = '';
+            window._pendingMemorySearchFolder = '';
+
+            // Sirf real-embedding (768-dim) wale items hi compare karne layak hain — purane
+            // 128-dim local-hash wale items ko yahan skip karte hain (unhe migrateOneOldEmbeddingIfNeeded
+            // background me upgrade karta rehta hai, isliye ye dheere-dheere apne aap theek ho jaata hai).
+            let items = Object.values(memoryItems).filter(x => x && x.embedding && x.text && x.embedding.length === EMBED_DIM);
+
+            // Folder-aware search: agar AI ne specific folder bola hai (jaise "friends"), pehle
+            // usi tag ke andar dhoondo. Agar us folder me kuch na mile, poore pool me fallback karo.
+            if (folder) {
+                const folderFiltered = items.filter(x => safeStr(x.tag).toLowerCase() === folder);
+                if (folderFiltered.length > 0) items = folderFiltered;
+            }
+
+            if (items.length === 0) { currentMemoryContext = ''; migrateOneOldEmbeddingIfNeeded(); return; }
+
+            const qv = await embedTextReal(query);
+            const scored = items.map(it => ({ text: it.text, tag: it.tag, ts: it.ts, s: cosineSim(qv, it.embedding) }));
+            scored.sort((a, b) => b.s - a.s);
+            const top = scored.slice(0, 8).filter(x => x.s > 0.05);
+            if (top.length === 0) { currentMemoryContext = ''; migrateOneOldEmbeddingIfNeeded(); return; }
+
+            // Retrieval = usefulness ka signal. Jo items actually kaam aaye, unka importance
+            // score thoda badha dete hain — isse smart eviction aur bhi behtar kaam karti hai.
+            const idsByTextTs = {};
+            Object.keys(memoryItems).forEach(id => { const it = memoryItems[id]; idsByTextTs[it.text + '|' + it.ts] = id; });
+            top.forEach(t => {
+                const rid = idsByTextTs[t.text + '|' + t.ts];
+                if (rid && memoryItems[rid]) {
+                    memoryItems[rid].score = (memoryItems[rid].score || 1) + 0.3;
+                    db.ref('buddy/memoryItems/' + rid + '/score').set(memoryItems[rid].score);
+                }
+            });
+
+            currentMemoryContext = top.map(x => `• [${x.tag}] ${x.text}`).join('\n');
+            migrateOneOldEmbeddingIfNeeded(); // background me ek purana item upgrade karte raho
+        }
+
+        function addTimeCapsule(cap) {
+            const message = safeStr(cap.message).slice(0, 300);
+            const dd = safeStr(cap.deliver_date).trim();
+            if (!message || !dd) return;
+            let deliverAt = 0;
+            const nowTs = Date.now();
+            if (/^\+(\d+)d$/i.test(dd)) {
+                deliverAt = nowTs + parseInt(dd.match(/\d+/)[0]) * 86400000;
+            } else if (/^\+(\d+)h$/i.test(dd)) {
+                deliverAt = nowTs + parseInt(dd.match(/\d+/)[0]) * 3600000;
+            } else if (/^\+(\d+)m$/i.test(dd)) {
+                deliverAt = nowTs + parseInt(dd.match(/\d+/)[0]) * 60000;
+            } else if (/^\d{1,2}:\d{2}$/.test(dd)) {
+                const [hh, mm] = dd.split(':').map(Number);
+                const dl = new Date(); dl.setHours(hh, mm, 0, 0);
+                if (dl.getTime() <= nowTs) dl.setDate(dl.getDate() + 1);
+                deliverAt = dl.getTime();
+            } else {
+                const parsed = Date.parse(dd.replace(' ', 'T'));
+                if (!isNaN(parsed)) deliverAt = parsed;
+            }
+            if (!deliverAt || deliverAt <= nowTs) {
+                logActivity('⚠️ Time-capsule deliver_date invalid: ' + dd, 'error');
+                return;
+            }
+            const id = 'cap_' + Date.now();
+            const entry = { id, message, deliverAt, delivered: false, createdAt: nowTs };
+            timeCapsules[id] = entry;
+            db.ref('buddy/timeCapsules/' + id).set(entry);
+            logActivity('⏳ Time-capsule saved — delivers ' + new Date(deliverAt).toLocaleString('en-IN'), 'task');
+        }
+
+        function checkTimeCapsules() {
+            const now = Date.now();
+            for (const id of Object.keys(timeCapsules)) {
+                const c = timeCapsules[id];
+                if (!c || c.delivered) continue;
+                if (now >= safeNum(c.deliverAt, 0)) {
+                    c.delivered = true;
+                    db.ref('buddy/timeCapsules/' + id).set(c);
+                    enqueueCall(`[SYSTEM TIME-CAPSULE DELIVERY]: Ye message tumne "purane tum" (past user) ne future ke liye chhoda tha: "${c.message}". Surprise + nostalgic tone me deliver karo (1-2 lines), phir chup ho jaana.`, { isSystemOverride: true });
+                }
+            }
+        }
+
+        function checkThrowback() {
+            const wk = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+            const mn = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+            const picks = [];
+            for (const dk of [wk, mn]) {
+                const day = timelineByDate[dk];
+                if (day) {
+                    const arr = Object.values(day);
+                    if (arr.length) {
+                        const pick = arr[Math.floor(Math.random() * arr.length)];
+                        picks.push(`(${dk === wk ? '1 hafte' : '1 mahine'} pehle) ${safeStr(pick.text).slice(0, 100)}`);
+                    }
+                }
+            }
+            todaysThrowback = picks.join(' — ');
+        }
+
+        function bumpChallengeStreak() {
+            const today = todayKey();
+            const y = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+            db.ref('buddy/challengeStreakMeta').once('value').then(snap => {
+                const meta = snap.val() || {};
+                if (meta.lastDoneDate === y || challengeStreak === 0) {
+                    challengeStreak = (challengeStreak || 0) + 1;
+                } else if (meta.lastDoneDate !== today) {
+                    challengeStreak = 1;
+                }
+                db.ref('buddy/challengeStreak').set(challengeStreak);
+                db.ref('buddy/challengeStreakMeta').set({ lastDoneDate: today });
+                updateRelLabel();
+            });
+        }
+
+        /* ================= v3: TIC-TAC-TOE MINI-GAME ================= */
+        function launchTicTacToe() {
+            if (tttActive) return;
+            tttActive = true;
+            tttGameOver = false;
+            gameMode = 'tic_tac_toe';
+            tttBoard = Array(9).fill('');
+            renderTTT();
+            face.style.display = 'none';
+            gameOverlay.style.display = 'flex';
+            gameStatus.innerText = 'Tumhari baari — koi cell tap karo (Tum ❌)';
+            logActivity('🎮 Tic-Tac-Toe launched.', 'system');
+        }
+
+        function endGame() {
+            tttActive = false;
+            tttGameOver = true;
+            gameMode = null;
+            gameOverlay.style.display = 'none';
+            face.style.display = 'flex';
+            logActivity('🎮 Game band.', 'system');
+        }
+
+        function renderTTT() {
+            tttGrid.innerHTML = '';
+            for (let i = 0; i < 9; i++) {
+                const cell = document.createElement('div');
+                cell.className = 'ttt-cell' + (tttBoard[i] ? ' taken' : '');
+                cell.innerText = tttBoard[i];
+                cell.style.color = tttBoard[i] === 'X' ? '#00e5ff' : '#ff9f4d';
+                cell.onclick = () => userTTTMove(i);
+                tttGrid.appendChild(cell);
+            }
+        }
+
+        function tttWinner(b) {
+            const L = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+            for (const [a,c,d] of L) if (b[a] && b[a] === b[c] && b[a] === b[d]) return b[a];
+            if (b.every(x => x)) return 'draw';
+            return null;
+        }
+
+        function userTTTMove(idx) {
+            if (!tttActive || tttGameOver || tttBoard[idx]) return;
+            tttBoard[idx] = 'X';
+            renderTTT();
+            const w = tttWinner(tttBoard);
+            if (w) { finishTTT(w); return; }
+            gameStatus.innerText = 'Buddy soch raha hai...';
+            const boardStr = tttBoard.map((c, i) => c || i).join(' | ');
+            enqueueCall(`[TIC-TAC-TOE TURN]: Tum ⭕ ho, user ❌. Board (0-8 index, empty cell number dikha raha hai):\n[${boardStr}]\nApna best move dedo — system_commands.ttt_move me ek empty index (0-8) do. speech_text me ek chhoti chhed-chhaad wali line bolo (1 line). emotion_to_show smirk/curious/laughing types me rakho.`, { isSystemOverride: true });
+        }
+
+        function applyBuddyTTTMove(idx) {
+            if (!tttActive || tttGameOver) return;
+            // AI ne invalid ya taken cell diya toh pehla empty pick karlo
+            if (typeof idx !== 'number' || idx < 0 || idx > 8 || tttBoard[idx]) {
+                idx = tttBoard.findIndex(c => !c);
+                if (idx < 0) return;
+            }
+            tttBoard[idx] = 'O';
+            renderTTT();
+            const w = tttWinner(tttBoard);
+            if (w) finishTTT(w);
+            else gameStatus.innerText = 'Tumhari baari — apna move karo';
+        }
+
+        function finishTTT(winner) {
+            tttGameOver = true;
+            let msg = '';
+            if (winner === 'X') { msg = 'Tum jeete! 🎉'; launchConfetti(); }
+            else if (winner === 'O') { msg = 'Buddy jeeta 😏'; }
+            else msg = 'Draw — tie rahi!';
+            gameStatus.innerText = msg + ' (End Game daba ke wapas jao)';
+            logActivity('🎮 TTT result: ' + msg, 'system');
+        }
+
+        function triggerRoastEnd() {
+            const winner = roastScore.user > roastScore.buddy ? 'user' : roastScore.buddy > roastScore.user ? 'buddy' : 'tie';
+            gameMode = null;
+            logActivity(`🔥 Roast battle end — ${winner === 'tie' ? 'TIE' : winner + ' wins'} (${roastScore.user}-${roastScore.buddy})`, 'system');
+            if (winner === 'user' || winner === 'buddy') launchConfetti();
+            roastRound = 0;
+            roastScore = { user: 0, buddy: 0 };
+        }
+
+        /* ================= v3: CONFETTI + EASTER EGG + SECRET GESTURE ================= */
+        function launchConfetti() {
+            const cont = document.getElementById('confetti-container');
+            const colors = ['#00e5ff', '#ff2d78', '#ffd166', '#7fffd4', '#ff9f4d', '#b39dff'];
+            for (let i = 0; i < 60; i++) {
+                const p = document.createElement('div');
+                p.className = 'confetti-piece';
+                p.style.left = Math.random() * 100 + '%';
+                p.style.background = colors[Math.floor(Math.random() * colors.length)];
+                p.style.animationDuration = (2 + Math.random() * 2) + 's';
+                p.style.animationDelay = (Math.random() * 0.5) + 's';
+                cont.appendChild(p);
+                setTimeout(() => p.remove(), 5000);
+            }
+        }
+
+        const SECRET_POOL = ['secret-dizzy', 'secret-rainbow', 'confetti-only', 'love-burst'];
+        function runEasterEgg() {
+            if (Date.now() - lastSecretAt < 3000) return; // debounce
+            lastSecretAt = Date.now();
+            const pick = SECRET_POOL[Math.floor(Math.random() * SECRET_POOL.length)];
+            if (pick === 'confetti-only') { launchConfetti(); }
+            else if (pick === 'love-burst') { setExpression('love'); launchConfetti(); setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 3500); }
+            else {
+                face.classList.add(pick);
+                setTimeout(() => face.classList.remove(pick), 2500);
+            }
+            updateStatus('✨ Secret unlocked!');
+            logActivity('✨ Easter egg triggered: ' + pick, 'system');
+        }
+
+        // Triple-tap on face — client-side instant, no API call
+        function handleFaceTap() {
+            const now = Date.now();
+            tapTimestamps.push(now);
+            tapTimestamps = tapTimestamps.filter(t => now - t < 700);
+            if (tapTimestamps.length >= 3) {
+                tapTimestamps = [];
+                runEasterEgg();
+            }
+        }
+
+        // 5-tap on mouth — manual "Shh!" unlock gesture. Client-side, instant, NO API call
+        // (isliye ye kaam Buddy muted hone ke bawajood bhi turant chalta hai, aur koi quota nahi khaata).
+        // Sirf tab kaam karta hai jab Buddy abhi muted ho — warna mouth-click ka koi asar nahi.
+        function handleMouthUnlockTap(event) {
+            event.stopPropagation(); // taaki parent .face ka tapToWake()/triple-tap wala logic na chal jaaye
+            if (muteMinutesRemaining <= 0) return; // muted nahi hai toh ye gesture inert hai
+            const now = Date.now();
+            mouthTapTimestamps.push(now);
+            mouthTapTimestamps = mouthTapTimestamps.filter(t => now - t < 3000); // 3 second window, 5 taps
+            if (mouthTapTimestamps.length >= 5) {
+                mouthTapTimestamps = [];
+                forceUnmuteViaTap();
+            }
+        }
+
+        function forceUnmuteViaTap() {
+            muteMinutesRemaining = 0;
+            db.ref('buddy/system/muteUntil').set(0);
+            mouth.classList.remove('muted-visual');
+            renderMuteStatus();
+            setExpression('surprised');
+            updateStatus('🔓 5-tap unlock — Buddy wapas bol sakta hai!');
+            logActivity('🔓 Mouth par 5 baar tap karke manually unmute kiya gaya.', 'system');
+            speak("Haan haan, sun raha hoon! Bol kya baat hai?", 'surprised');
+        }
+
+        /* ================= 10. DRESS / ROAST TRACKER ================= */
+        function logDress(desc) {
+            const k = todayKey();
+            db.ref('buddy/dressLog').once('value').then(snap => {
+                const log = snap.val() || {};
+                const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+                const dayBefore = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+                const similarity = (a, b) => {
+                    if (!a || !b) return false;
+                    const wa = new Set(a.toLowerCase().split(/\s+/));
+                    return b.toLowerCase().split(/\s+/).filter(w => wa.has(w)).length >= 2;
+                };
+                log[k] = desc;
+                db.ref('buddy/dressLog').set(log);
+                if (similarity(desc, log[yesterday]) && similarity(desc, log[dayBefore])) {
+                    if (commentAllowed('dressRoast', 360, 0.8)) {
+                        enqueueCall(`[SYSTEM DRESS ALERT]: User lagatar 3 din se same type ke kapde pehne hai ("${desc}"). Roast karo — "Bhai kapde dho le!" style. Funny raho, mean mat bano.`, { isSystemOverride: true });
+                    }
+                }
+            });
+        }
+
+        /* ================= 11. HOURLY SUMMARIZER + ROUTINE BREAKER ================= */
+        function hourlyTick() {
+            const now = new Date();
+            const hr = now.getHours();
+            if (hr === lastSummaryHour) return;
+            lastSummaryHour = hr;
+
+            // Routine breaker: user normally sleeps early but awake at 3am?
+            if (hr >= 1 && hr < 5 && !isSleeping && muteMinutesRemaining === 0) {
+                if (commentAllowed('routineBreaker', 180, 0.5)) {
+                    enqueueCall(`[SYSTEM NIGHT OBSERVATION]: Raat ke ${hr} baj rahe hain aur user jaga hua hai. Agar iski aadat jaldi sone ki hai toh toko — "Aaj sone ka iraada nahi hai kya?" style. Kabhi kabhi hi bolo.`, { isSystemOverride: true });
+                }
+            }
+
+            // Hourly summary compress
+            if (memHourlySummary.length > 400 && !isApiPaused()) {
+                const prompt = `[SYSTEM]: Yeh pichle ghanton ki observation notes hain. Inhe 2-3 lines ki Hinglish summary me compress karo (sirf text):\n${memHourlySummary}`;
+                fetch(`https://generativelanguage.googleapis.com/v1beta/models/${LIGHT_MODEL_NAME}:generateContent?key=${API_KEY}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    const s = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (s && s.length > 20) {
+                        memHourlySummary = s.trim().slice(0, MEM_LIMITS.hourlySummary);
+                        db.ref('buddy/memory/hourlySummary').set(memHourlySummary);
+                    }
+                }).catch(e => console.error(e));
+            }
+        }
+
+        /* ================= 12. CORE TIMERS ================= */
+        // 1-Minute Clock (mute countdown + task checks + hourly tick)
+        setInterval(() => {
+            if (muteMinutesRemaining > 0) {
+                muteMinutesRemaining--;
+                if (muteMinutesRemaining === 0) {
+                    mouth.classList.remove('muted-visual');
+                    updateStatus("Mute khatam — Buddy wapas!");
+                }
+            }
+            checkTasks();
+            checkTimeCapsules();
+            hourlyTick();
+            renderMuteStatus();
+        }, 60000);
+
+        // Daily-tick — throwback check + daily challenge suggestion trigger
+        setInterval(() => {
+            checkThrowback();
+            const today = todayKey();
+            const hasChallenge = dailyChallenge && dailyChallenge.date === today;
+            const hour = new Date().getHours();
+            if (!hasChallenge && hour >= 9 && hour < 22 && lastChallengeRequestDate !== today && muteMinutesRemaining === 0 && !conversationActive) {
+                lastChallengeRequestDate = today;
+                enqueueCall('[SYSTEM DAILY-CHALLENGE-REQUEST]: Aaj ka koi chhota achievable challenge suggest karo (habits/goals memory se relevant, jaise "30 min bina phone padhai"). system_commands.set_daily_challenge me text daalo. Speech me halka casual tone rakho, ek line.', { isSystemOverride: true });
+            }
+        }, 30 * 60000); // har 30 min check
+
+        // Dynamic Observation Loop (5 min idle / 10 min active chat) — see BACKGROUND_OBSERVATION_ENABLED above
+        function startObservationLoop() {
+            if (observationTimer) clearInterval(observationTimer);
+            if (!BACKGROUND_OBSERVATION_ENABLED) return; // token-saving: periodic photo-checks off
+            observationTimer = setInterval(async () => {
+                if (isSleeping || muteMinutesRemaining > 0) return;
+                if (isSpeaking || isProcessing || conversationActive) return; // don't collide with active work / live conversation
+                if (isOffline) return;
+                // Deep-night skip — 1AM-6AM bilkul camera off (isSleeping check ke upar bhi as safety)
+                const hr = new Date().getHours();
+                if (hr >= 1 && hr < 6) return;
+
+                // --- Buddy's own mood ticks up quietly the longer it's quiet (esp. during study) ---
+                const idleMinutes = (Date.now() - lastRealInteractionAt) / 60000;
+                if (lastDetectedActivity === 'studying') {
+                    buddyMood = Math.min(100, buddyMood + 4 + Math.random() * 4);
+                } else if (idleMinutes > 5) {
+                    buddyMood = Math.min(100, buddyMood + 1 + Math.random() * 2);
+                }
+                saveAiState();
+
+                // --- 1) REAL boredom trigger — code-controlled, not just LLM's mood ---
+                // Genuine silence (no actual user interaction) crosses a real threshold,
+                // so Buddy self-initiates instead of relying on the model to "feel" bored.
+                if (idleMinutes >= BORED_THRESHOLD_MIN && commentAllowed('boredomGame', 20, 0.6)) {
+                    setExpression('bored');
+                    const photo = await takeSnapshot();
+                    enqueueCall(`[SYSTEM BOREDOM]: User se ${Math.floor(idleMinutes)} minute se koi real baat-cheet nahi hui. Tum genuinely bore ho gaye ho. Emotion_to_show "bored" rakho aur ya toh user ko ek chhota game offer karo (word-chain/antakshari/paheli), YA agar photo me user dikh hi nahi raha toh self_decision.want_to_do:"play" bhejo (khud akele khelo). In dono me se koi ek zaroor karo — chup mat raho.`, { base64Image: photo, isSystemOverride: true });
+                    return;
+                }
+
+                // --- 2) Study-mode restraint — driven by Buddy's OWN mood, not a fixed dice roll ---
+                // Jitni der se studying dekh raha hai utna restless hota jaata hai (buddyMood upar),
+                // aur jab mood kaafi badh jaaye tabhi kabhi-kabhi khud check-in karta hai — warna chup.
+                if (lastDetectedActivity === 'studying') {
+                    const cooldownOk = (Date.now() - (lastCommentAt['studyCheckIn'] || 0)) > 30 * 60000;
+                    const chance = Math.min(0.55, buddyMood / 160); // zyada restless = thoda zyada chance, kabhi guarantee nahi
+                    if (!cooldownOk || Math.random() > chance) {
+                        const photo = await takeSnapshot();
+                        if (photo) enqueueCall("[SYSTEM SILENT OBSERVE - STUDY MODE]: User padhai kar raha hai — bilkul disturb mat karo. Image sirf memory/habit note ke liye dekho, action silent hi rakhna.", { base64Image: photo, background: true });
+                        return;
+                    }
+                    // Mood ne is baar "bolo" bola — bolne ke baad restlessness thodi shant ho jaati hai
+                    lastCommentAt['studyCheckIn'] = Date.now();
+                    const moodAtTrigger = Math.round(buddyMood);
+                    buddyMood = Math.max(10, buddyMood - 35);
+                    saveAiState();
+                    setExpression('curious');
+                    const photo = await takeSnapshot();
+                    enqueueCall(`[SYSTEM STUDY CHECK-IN]: Tumhara abhi ka restlessness/curiosity level ${moodAtTrigger}/100 tak pahuch gaya tha, isliye is baar halka sa bolne ka mann kiya. User padhai kar raha hai — EXTRA halka comment/sawal karo (jaise "Kya padh rahe ho?" ya posture tip), 1 line se zyada mat bolo, phir chup ho jaana.`, { base64Image: photo, isSystemOverride: true });
+                    return;
+                }
+
+                if (!commentAllowed('observationSpeak', 25, 0.45)) {
+                    // still silently log habit/activity occasionally without speaking
+                    const photo = await takeSnapshot();
+                    if (photo) enqueueCall("[SYSTEM SILENT OBSERVE]: Image dekho. Kuch bolna nahi hai (action silent rakhna almost zaroori) — sirf agar koi important habit/activity dikhe toh memory me note karo. Jab user wapas aaye toh ye notes kaam aayengi.", { base64Image: photo, background: true });
+                    return;
+                }
+                const photo = await takeSnapshot();
+                enqueueCall("[SYSTEM]: Background Observation. Image dekho. Normal sab theek ho toh silent raho. Sirf genuinely interesting/nayi cheez pe comment karo — checklist follow karo par anti-spam discipline yaad rakhna.", { base64Image: photo, background: true });
+            }, observationIntervalTime);
+        }
+
+        // 15-Minute Auto-Wake Cycle (AI khud decide karega kya karna hai)
+        setInterval(async () => {
+            if (isSleeping && muteMinutesRemaining === 0) {
+                setExpression('normal');
+                const photo = await takeSnapshot();
+                enqueueCall("[SYSTEM AUTO-WAKE]: Tum 15 minute se so rahe the. Image dekho aur self_decision me khud decide karo — kya karna hai (sleep wapas / play / observe / chat offer). User nahi dikhe toh akele khel sakte ho (play_alone_animation).", { base64Image: photo, background: true });
+            }
+        }, 900000);
+
+        // --- Randomized self-play reactions when bored/alone ---
+        // Multiple variants so it doesn't feel scripted; remembers the last one used
+        // (lastBoredAction, persisted) so the SAME reaction never plays twice in a row.
+        const BORED_VARIANTS = ['play_happy_sleep', 'curious_chase', 'confused_laugh', 'mischief_wink', 'just_sleepy',
+            'star_gaze', 'air_guitar', 'cool_pose', 'glitch_out', 'meditate', 'determined_workout',
+            'whistle_tune', 'nervous_hide', 'dizzy_spin', 'grumpy_nap'];
+        function pickBoredVariant() {
+            const options = BORED_VARIANTS.filter(v => v !== lastBoredAction);
+            const pick = options[Math.floor(Math.random() * options.length)];
+            lastBoredAction = pick;
+            saveAiState();
+            return pick;
+        }
+        function runBoredSequence(variant) {
+            switch (variant) {
+                case 'curious_chase':
+                    setExpression('curious');
+                    updateStatus("Arre ye kya hai...? 👀");
+                    setTimeout(() => { setExpression('happy'); updateStatus("Chal isi se khelte hain!"); }, 1000);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 5000);
+                    break;
+                case 'confused_laugh':
+                    setExpression('confused');
+                    updateStatus("Ye kaise khelte hain bhai...");
+                    setTimeout(() => { setExpression('laughing'); updateStatus("Hahaha khud hi gira diya 😂"); }, 1200);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 5500);
+                    break;
+                case 'mischief_wink':
+                    setExpression('winking');
+                    updateStatus("Chup-chaap kuch karte hain 😏");
+                    setTimeout(() => { setExpression('smirk'); }, 1300);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 5000);
+                    break;
+                case 'just_sleepy':
+                    setExpression('sleepy');
+                    updateStatus("Nahi yaar... aaj khelne ka mann nahi 🥱");
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) { isSleeping = true; setExpression('sleeping'); } }, 4000);
+                    break;
+                case 'star_gaze':
+                    setExpression('starstruck');
+                    updateStatus("Waah... sitaare dekh raha hu 🌟");
+                    setTimeout(() => { setExpression('love'); }, 1500);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 5500);
+                    break;
+                case 'air_guitar':
+                    setExpression('excited');
+                    updateStatus("Chal thoda rock karte hain! 🎸");
+                    setTimeout(() => { setExpression('laughing'); }, 1300);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 5500);
+                    break;
+                case 'cool_pose':
+                    setExpression('cool');
+                    updateStatus("Ekdum cool dikh raha hu na? 😎");
+                    setTimeout(() => { setExpression('smirk'); }, 1600);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 5500);
+                    break;
+                case 'glitch_out':
+                    setExpression('glitch');
+                    updateStatus("Arre yeh kya hua... 📟");
+                    setTimeout(() => { setExpression('confused'); }, 1000);
+                    setTimeout(() => { setExpression('laughing'); updateStatus("Haha bas thoda glitch tha 😄"); }, 2200);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 6000);
+                    break;
+                case 'meditate':
+                    setExpression('relaxed');
+                    updateStatus("Chalo thoda dhyaan lagate hain... 🧘");
+                    setTimeout(() => { setExpression('zoned'); }, 1800);
+                    setTimeout(() => { setExpression('sleepy'); }, 3600);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) { isSleeping = true; setExpression('sleeping'); } }, 5500);
+                    break;
+                case 'determined_workout':
+                    setExpression('determined');
+                    updateStatus("Ek... do... push-up! 💪");
+                    setTimeout(() => { setExpression('proud'); updateStatus("Ho gaya! 🏆"); }, 1600);
+                    setTimeout(() => { setExpression('happy'); }, 3000);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 5800);
+                    break;
+                case 'whistle_tune':
+                    setExpression('whistling');
+                    updateStatus("Seeti bajate hain thoda... 🎵");
+                    setTimeout(() => { setExpression('relaxed'); }, 1800);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 5500);
+                    break;
+                case 'nervous_hide':
+                    setExpression('nervous');
+                    updateStatus("Kisi ne dekh toh nahi liya...? 👀");
+                    setTimeout(() => { setExpression('sneaky'); }, 1200);
+                    setTimeout(() => { setExpression('shy'); }, 2600);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 5800);
+                    break;
+                case 'dizzy_spin':
+                    setExpression('dizzy');
+                    updateStatus("Chakkar khaate hain thoda! 🌀");
+                    setTimeout(() => { setExpression('laughing'); updateStatus("Hahaha sar ghoom gaya 😵"); }, 1600);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) setExpression('normal'); }, 5800);
+                    break;
+                case 'grumpy_nap':
+                    setExpression('grumpy');
+                    updateStatus("Bas karo yaar... so jaata hu 😤");
+                    setTimeout(() => { setExpression('sleepy'); }, 1600);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) { isSleeping = true; setExpression('sleeping'); } }, 4000);
+                    break;
+                case 'play_happy_sleep':
+                default:
+                    // original sequence — kept exactly as-is as one of the possible outcomes
+                    setExpression('bored');
+                    updateStatus("Koi nahi hai... bore ho gaya 😐");
+                    setTimeout(() => { setExpression('happy'); updateStatus("Chalo khud hi khelte hain 🎮"); }, 900);
+                    setTimeout(() => { if (!isSpeaking && !conversationActive) { isSleeping = true; setExpression('sleeping'); } }, 6000);
+                    break;
+            }
+        }
+
+        function handleSelfDecision(selfDec, sysCmds) {
+            if (sysCmds.play_alone_animation || safeStr(selfDec.want_to_do) === 'play') {
+                runBoredSequence(pickBoredVariant());
+                return;
+            }
+            if (safeStr(selfDec.want_to_do) === 'sleep') {
+                isSleeping = true; setExpression('sleeping');
+            }
+        }
+
+        /* ================= 12b. IDLE-FUN (pure client-side, zero API) ================= */
+        function scheduleIdleFun() {
+            clearTimeout(idleFunTimer);
+            const delay = 15000 + Math.random() * 5000; // 15-20 sec
+            idleFunTimer = setTimeout(runIdleFunTick, delay);
+        }
+
+        function stopIdleFun() {
+            clearTimeout(idleFunTimer);
+            idleFunTimer = null;
+            face.classList.remove('look-left', 'look-right', 'look-up');
+        }
+
+        function runIdleFunTick() {
+            // Safety: agar conversation wapas shuru ho gayi ya kuch aur process ho raha hai, chup ho jao
+            if (conversationActive || isSpeaking || isProcessing) { idleFunTimer = null; return; }
+
+            if (isSleeping) {
+                // 25% chance: neend se khud utth ke random game khelta hai. Baaki 75% halka "sapne wala" flash.
+                if (Math.random() < 0.25) {
+                    isSleeping = false;
+                    runBoredSequence(pickBoredVariant()); // kai variants khud hi wapas so jaate hain end me
+                } else {
+                    const dreamExpr = IDLE_DREAM_SET[Math.floor(Math.random() * IDLE_DREAM_SET.length)];
+                    setExpression(dreamExpr);
+                    setTimeout(() => { if (isSleeping) setExpression('sleeping'); }, 700 + Math.random() * 400);
+                }
+            } else {
+                const roll = Math.random();
+                if (roll < 0.4) {
+                    // idhar-udhar dekhna
+                    const dir = IDLE_LOOK_DIRS[Math.floor(Math.random() * IDLE_LOOK_DIRS.length)];
+                    face.classList.add(dir);
+                    setTimeout(() => face.classList.remove(dir), 900 + Math.random() * 500);
+                } else if (roll < 0.75) {
+                    // alag expression
+                    setExpression(IDLE_EXPR_SET[Math.floor(Math.random() * IDLE_EXPR_SET.length)]);
+                } else {
+                    // khud khelna — pehle se bana hua client-side self-play reuse
+                    runBoredSequence(pickBoredVariant());
+                }
+            }
+            scheduleIdleFun();
+        }
+        /* ================= 13. TEXT-TO-SPEECH (Dynamic pitch/rate + Night Whisper) ================= */
+        function pickVoice() {
+            const voices = window.speechSynthesis.getVoices();
+            return voices.find(v => /hi[-_]IN/i.test(v.lang))
+                || voices.find(v => /^hi/i.test(v.lang))
+                || voices.find(v => /en[-_]IN/i.test(v.lang))
+                || null;
+        }
+
+        // --- Magpie TTS (NVIDIA) audio plumbing ---
+        let ttsAudioCtx = null;
+        function getTtsAudioCtx() {
+            if (!ttsAudioCtx) ttsAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            return ttsAudioCtx;
+        }
+        let currentTtsSource = null;
+
+        // Pehli baar /list_voices call karke hi-IN ka koi bhi available voice dhoondh ke cache kar leta hai
+        // (specific voice maangi nahi gayi — jo bhi mile wahi chalega). Fail ho jaye toh ek reasonable guess use hoga.
+        async function getMagpieHindiVoice() {
+            if (magpieVoiceName) return magpieVoiceName;
+            try {
+                const res = await fetch(`${MAGPIE_PROXY_URL}?action=list_voices`);
+                const data = await res.json();
+                for (const localesKey in data) {
+                    if (localesKey.split(',').map(s => s.trim()).includes(MAGPIE_LANGUAGE)) {
+                        const voices = data[localesKey].voices || [];
+                        // base voice name prefer karo (bina .Happy/.Angry jaisa emotion suffix ke)
+                        const base = voices.find(v => v.startsWith(`Magpie-Multilingual.${MAGPIE_LANGUAGE.toUpperCase()}.`) && v.split('.').length === 3);
+                        magpieVoiceName = base || voices.find(v => v.toUpperCase().includes(MAGPIE_LANGUAGE.toUpperCase())) || voices[0];
+                        // v3.4: emotion-suffixed variants (.Happy/.Angry/.Sad etc.) bhi yahin cache kar lo —
+                        // pehle ye discover hoke bhi discard ho jaate the, aur unki jagah base voice ko
+                        // client-side pitch-shift (detune) karke "fake" emotion banaya jaata tha, jo
+                        // pronunciation distort kar deta tha. Ab asli emotion-voice use hogi.
+                        if (magpieVoiceName) {
+                            const prefix = magpieVoiceName + '.';
+                            magpieVoiceVariants = {};
+                            voices.forEach(v => {
+                                if (v.startsWith(prefix)) {
+                                    const suffix = v.slice(prefix.length); // e.g. "Happy"
+                                    if (suffix && !suffix.includes('.')) magpieVoiceVariants[suffix.toLowerCase()] = v;
+                                }
+                            });
+                            return magpieVoiceName;
+                        }
+                    }
+                }
+            } catch (e) { /* neeche fallback guess use hoga */ }
+            magpieVoiceName = `Magpie-Multilingual.${MAGPIE_LANGUAGE.toUpperCase()}.Aria`; // guess, agar discovery fail ho jaye
+            if (!magpieVoiceVariants) magpieVoiceVariants = {};
+            return magpieVoiceName;
+        }
+
+        // Emotion ke naam ko Magpie ke apne emotion-voice suffixes se map karta hai.
+        // Agar wo specific emotion-voice available na ho, base (neutral) voice pe fallback hota hai —
+        // ismein koi pitch-shift/detune nahi lagta, isliye pronunciation clean rehta hai.
+        const EMOTION_TO_MAGPIE_SUFFIX = {
+            angry: 'angry', annoyed: 'angry', grumpy: 'angry',
+            sad: 'sad', crying: 'sad',
+            happy: 'happy', excited: 'happy', proud: 'happy',
+            surprised: 'surprised',
+            sleepy: 'sad', sleeping: 'sad',
+            whistling: 'happy'
+        };
+        async function getMagpieVoiceForEmotion(emotion) {
+            const base = await getMagpieHindiVoice();
+            const suffix = EMOTION_TO_MAGPIE_SUFFIX[emotion];
+            if (suffix && magpieVoiceVariants && magpieVoiceVariants[suffix]) {
+                return magpieVoiceVariants[suffix];
+            }
+            return base;
+        }
+
+        // v3.3: VOICE TUNING FIX — pehle emotion ke hisaab se pitch 0.85–1.5 tak jump karta tha,
+        // jisse har baar ek "alag" awaaz lagti thi aur high-pitch wale emotions (happy/angry) me
+        // "cat/chipmunk" jaisa artifact aata tha (pre-recorded voice ko itna upar pitch-shift karne
+        // ka side-effect). Ab range bohot tang (0.93–1.12) hai — voice hamesha consistent/normal
+        // sunegi, sirf halka sa emotional hint milega, extreme squeaky effect nahi aayega.
+        // Volume bhi thoda boost kiya gaya hai (1.0 → 1.3) taaki awaaz zyada aaye.
+        function computeVoiceParams(emotion, opts, isNight) {
+            let pitch = 1.0, rate = 1.0, volume = 2.4; // v3.4: volume 1.3 -> 2.4, awaaz kaafi zyada aayegi ab
+            if (emotion === 'angry') { pitch = 1.12; rate = 1.15; }
+            else if (emotion === 'sad') { pitch = 0.95; rate = 0.9; }
+            else if (emotion === 'sleeping') { pitch = 0.93; rate = 0.85; }
+            else if (emotion === 'happy' || emotion === 'surprised') { pitch = 1.08; rate = 1.05; }
+
+            // AI-provided overrides — range bhi tang kiya (pehle 0.5–2.0 allow karta tha, jo
+            // AI ko bhi kabhi-kabhi extreme "cat" pitch maangne deta tha)
+            if (!isNaN(opts.pitch)) pitch = Math.min(Math.max(opts.pitch, 0.88), 1.15);
+            if (!isNaN(opts.rate)) rate = Math.min(Math.max(opts.rate, 0.75), 1.25);
+
+            if (opts.whisper || isNight) {
+                volume = Math.min(volume, 1.1); // whisper me phir bhi normal se halka hi rahega, par ab pehle se zyada saaf sunega
+                rate = Math.min(rate, 0.85);
+                pitch = Math.min(pitch, 1.0);
+            }
+            return { pitch, rate, volume };
+        }
+
+        // speak() ab ek Promise return karta hai jo TABHI resolve hota hai jab audio
+        // SACH ME khatam ho jaaye (ya poori tarah fail ho jaaye) — na ki jaise hi
+        // playback shuru hota hai. Isi wajah se mic "thinking"/TTS-network-fetch ke
+        // dauran wapas on ho jaata tha (asli bug) — ab caller isko await karke hi
+        // aage badhta hai, isliye mic Buddy ke poora bol chukne ke BAAD hi khulta hai.
+        function speak(text, emotion, opts = {}) {
+            const hour = new Date().getHours();
+            const isNight = (hour >= 23 || hour < 6);
+            let { pitch, rate, volume } = computeVoiceParams(emotion, opts, isNight);
+
+            return new Promise((resolve) => {
+                (async () => {
+                    try {
+                        if (currentTtsSource) { try { currentTtsSource.stop(); } catch (e) {} currentTtsSource = null; }
+
+                        // v3.4: base voice ko pitch-shift (detune) karke fake emotion banane ke bajaye,
+                        // Magpie ki apni real emotion-voice (agar available ho) use karo — isse
+                        // pronunciation clean rehta hai, artifact/distortion nahi aata.
+                        const voice = await getMagpieVoiceForEmotion(emotion);
+
+                        // v3.3: Ek chhota retry (max 2 attempts) — agar network/timeout ki wajah se
+                        // pehli koshish fail ho, seedha browser-voice pe switch karne se pehle ek
+                        // aur try kar lo. Isse "achanak voice change" kam hoga, kyunki transient
+                        // glitches par bhi Magpie ki hi awaaz bani rahegi, alag browser-voice pe nahi kudegi.
+                        let audioBuffer = null, lastErr = null;
+                        for (let attempt = 0; attempt < 2 && !audioBuffer; attempt++) {
+                            try {
+                                const form = new FormData();
+                                form.append("text", text);
+                                form.append("language", MAGPIE_LANGUAGE);
+                                form.append("voice", voice);
+                                form.append("encoding", "LINEAR_PCM");
+                                form.append("sample_rate_hz", "44100");
+
+                                const controller = new AbortController();
+                                const timeoutId = setTimeout(() => controller.abort(), 12000);
+                                const response = await fetch(`${MAGPIE_PROXY_URL}?action=synthesize`, {
+                                    method: "POST", body: form, signal: controller.signal
+                                });
+                                clearTimeout(timeoutId);
+                                if (!response.ok) throw new Error("Magpie TTS: HTTP " + response.status + " — " + await response.text());
+
+                                const wavBytes = await response.arrayBuffer();
+                                const ctx = getTtsAudioCtx();
+                                if (ctx.state === 'suspended') await ctx.resume();
+                                audioBuffer = await ctx.decodeAudioData(wavBytes);
+                            } catch (e) {
+                                lastErr = e;
+                                if (attempt === 0) await new Promise(r => setTimeout(r, 300)); // ek chhota gap, phir dobara try
+                            }
+                        }
+                        if (!audioBuffer) throw lastErr || new Error("Magpie TTS: unknown failure after retry");
+
+                        const ctx = getTtsAudioCtx();
+                        const source = ctx.createBufferSource();
+                        source.buffer = audioBuffer;
+                        source.playbackRate.value = rate;
+                        // v3.4: detune/pitch-shift hata diya — Magpie ki asli emotion-voice (upar select ki gayi)
+                        // already emotion carry karti hai, isliye upar se pitch-bend lagane ki zaroorat nahi.
+                        // Ye hi woh cheez thi jo words ko distort/galat-pronounce kar deti thi.
+                        source.detune.value = 0;
+
+                        const gainNode = ctx.createGain();
+                        gainNode.gain.value = volume;
+                        source.connect(gainNode).connect(ctx.destination);
+                        currentTtsSource = source;
+
+                        source.onended = () => {
+                            if (currentTtsSource === source) currentTtsSource = null;
+                            isSpeaking = false; mouth.classList.remove('talking-mouth');
+                            updateStatus("Waiting...");
+                            if (conversationActive) scheduleMicResume(400);
+                            resolve();
+                        };
+
+                        isSpeaking = true; mouth.classList.add('talking-mouth'); updateStatus(`Buddy: ${text}`);
+                        source.start(0);
+                    } catch (err) {
+                        // Magpie TTS dono attempt me fail ho jaye (network/quota/rate-limit/etc.) toh
+                        // buddy chup na rahe — browser TTS pe fallback
+                        logActivity('⚠️ Magpie TTS fail (retry ke baad bhi), browser voice pe fallback: ' + err.message, 'error');
+                        await speakBrowserFallback(text, emotion, opts);
+                        resolve();
+                    }
+                })();
+            });
+        }
+
+        // Purana browser-voice tarika — sirf Magpie TTS fail hone par backup ke taur par.
+        // Ye bhi ek Promise return karta hai jo utterance sach me khatam hone par hi resolve hota hai.
+        function speakBrowserFallback(text, emotion, opts = {}) {
+            return new Promise((resolve) => {
+                if (!('speechSynthesis' in window)) { resolve(); return; }
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'hi-IN';
+                const v = pickVoice();
+                if (v) utterance.voice = v;
+
+                const hour = new Date().getHours();
+                const isNight = (hour >= 23 || hour < 6);
+                let { pitch, rate, volume } = computeVoiceParams(emotion, opts, isNight);
+                volume = Math.min(volume, 1.0); // browser SpeechSynthesis API ka max volume 1.0 hai, isse zyada allowed nahi
+
+                utterance.pitch = pitch;
+                utterance.rate = rate;
+                utterance.volume = volume;
+
+                utterance.onstart = () => { isSpeaking = true; mouth.classList.add('talking-mouth'); updateStatus(`Buddy: ${text}`); };
+                utterance.onend = () => {
+                    isSpeaking = false; mouth.classList.remove('talking-mouth');
+                    updateStatus("Waiting...");
+                    if (conversationActive) scheduleMicResume(400);
+                    resolve();
+                };
+                utterance.onerror = () => {
+                    isSpeaking = false; mouth.classList.remove('talking-mouth');
+                    if (conversationActive) scheduleMicResume(600);
+                    resolve();
+                };
+                window.speechSynthesis.speak(utterance);
+            });
+        }
+
+        function cancelSpeech() {
+            window.speechSynthesis.cancel();
+            if (currentTtsSource) { try { currentTtsSource.stop(); } catch (e) {} currentTtsSource = null; }
+            isSpeaking = false;
+            mouth.classList.remove('talking-mouth');
+            updateStatus("Interrupted.");
+        }
+
+        /* ============ 13.5 NATIVE SPEECH BRIDGE (sirf Android APK ke liye — browser code untouched) ============ */
+        // Capacitor ke andar chalne par window.Capacitor milta hai. Browser me ye false rahega
+        // aur neeche wala purana webkitSpeechRecognition code bilkul waise hi chalega.
+        const IS_NATIVE_APP = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        let nativeSttReady = false;
+        let nativeSttAvailable = false;
+
+        // Native mic se aaya FINAL transcript — browser wale onresult ka exact same behavior,
+        // taaki chup/bye/unmute/mood/history sab ek jaisa kaam kare.
+        function nativeHandleTranscript(text) {
+            const userSpeech = safeStr(text || '').trim();
+            if (!userSpeech) return;
+
+            // Self-voice feedback protection: jab TTS bol raha hai tab sirf interrupt-keywords process karo
+            if (isSpeaking) {
+                if (/^(chup|shut up|bas kar|band kar|quiet|ruk|bas)/i.test(userSpeech)) {
+                    cancelSpeech();
+                    updateStatus("Theek hai, chup.");
+                    logActivity('\u{1FAE4} User ne bolne ke dauran interrupt kiya.', 'user');
+                }
+                return;
+            }
+
+            if (/^(chup|shut up|bas kar|band kar|quiet|ruk)/i.test(userSpeech)) {
+                cancelSpeech();
+                updateStatus("Theek hai, chup.");
+                logActivity('\u{1FAE4} User ne "chup" bola — Buddy ruk gaya.', 'user');
+                return;
+            }
+
+            if (muteMinutesRemaining > 0 && /\b(buddy\s*bol|wapas\s*aa\s*ja|unmute|bol\s*na|bol\s*yaar)\b/i.test(userSpeech)) {
+                muteMinutesRemaining = 0;
+                db.ref('buddy/system/muteUntil').set(0);
+                mouth.classList.remove('muted-visual');
+                renderMuteStatus();
+                updateStatus("Wapas aa gaya!");
+                logActivity('\u{1F507} User ne quick-unmute bola.', 'user');
+                return;
+            }
+
+            if (/\b(bye(\s*bye)?|good\s*bye|good\s*night|alvida|tata|chalta\s*hu(n)?|nikal(ta|te)?\s*(hu|hoon|hain)|so\s*(raha|jaa|jaata)\s*hu(n)?)\b/i.test(userSpeech)) {
+                updateStatus(`You: ${userSpeech}`);
+                pushHistory('user', userSpeech);
+                logActivity('\u{1F44B} User: ' + userSpeech.slice(0, 100), 'user');
+                bumpInteractions();
+                recordReply();
+                logActivity('\u{1F51A} Conversation khatam — mic band ho gaya.', 'system');
+                endConversation();
+                enqueueCall(userSpeech + "\n[SYSTEM NOTE]: User ne baat khatam kar di (bye bola). Ek chhota warm farewell bolo — max 1 line, phir chup ho jao.", { isSystemOverride: true });
+                return;
+            }
+
+            updateStatus(`You: ${userSpeech}`);
+            logActivity('\u{1F5E3}\uFE0F User bola: ' + userSpeech.slice(0, 100), 'user');
+            pushHistory('user', userSpeech);
+            bumpInteractions();
+            recordReply();
+            awaitingUserReply = false;
+            lastRealInteractionAt = Date.now();
+            buddyMood = Math.max(0, buddyMood - 40);
+            saveAiState();
+            enterConversationMode();
+            enqueueCall(userSpeech, { isSystemOverride: isInstantRequest(userSpeech) });
+        }
+
+        // App start pe ek baar: availability + mic/camera permission + listeners
+        async function nativeSttInit() {
+            if (!IS_NATIVE_APP || nativeSttReady) return;
+            try {
+                const SR = window.Capacitor.Plugins && window.Capacitor.Plugins.SpeechRecognition;
+                if (!SR) throw new Error('SpeechRecognition plugin load nahi hua');
+
+                const avail = await SR.available();
+                nativeSttAvailable = !!(avail && avail.available);
+                if (!nativeSttAvailable) { logActivity('\u26A0\uFE0F Is phone me speech recognition available nahi hai.', 'error'); return; }
+
+                // Camera permission bhi yahin — face/emotion detection (getUserMedia) ke liye
+                try {
+                    if (window.Capacitor.Plugins.Camera) {
+                        const camPerm = await window.Capacitor.Plugins.Camera.requestPermissions({ permissions: ['camera'] });
+                        if (!camPerm || camPerm.camera !== 'granted') logActivity('\u26A0\uFE0F Camera permission nahi mili — camera feature band rahega.', 'error');
+                    }
+                } catch (e) { console.warn('Camera permission error:', e); }
+
+                let perm = await SR.checkPermissions();
+                if (perm.speechRecognition !== 'granted') perm = await SR.requestPermissions();
+                if (perm.speechRecognition !== 'granted') {
+                    nativeSttAvailable = false;
+                    updateStatus("Mic permission nahi mili.");
+                    logActivity('\u26A0\uFE0F Mic permission deny ho gayi — voice input band.', 'error');
+                    return;
+                }
+
+                // listening start/stop = browser ke onstart/onend jaisa
+                SR.addListener('listeningState', (data) => {
+                    if (data && data.status === 'started') {
+                        isListening = true;
+                        talkBtn.classList.add('active');
+                        talkBtn.innerText = "Listening...";
+                        logActivity('\u{1F3A4} Mic on — sun raha hai...', 'system');
+                    } else {
+                        // Android me true continuous mode hota hi nahi (platform limit) —
+                        // isliye jaise hi ruke, conversation chalu hai toh 300ms me wapas start.
+                        isListening = false;
+                        if (conversationActive && !isSpeaking && muteMinutesRemaining === 0) {
+                            scheduleMicResume(300);
+                        } else {
+                            talkBtn.classList.remove('active');
+                            talkBtn.innerText = "\u{1F3A4} Speak";
+                        }
+                    }
+                });
+
+                nativeSttReady = true;
+                logActivity('\u2705 Native mic ready (Android speech engine).', 'system');
+            } catch (e) {
+                nativeSttAvailable = false;
+                console.warn('Native STT init fail:', e);
+            }
+        }
+
+        // Ek listening session start; FINAL result promise se aata hai (partialResults:false — double-fire nahi)
+        async function nativeStart() {
+            if (!nativeSttAvailable || isListening) return;
+            try {
+                const res = await window.Capacitor.Plugins.SpeechRecognition.start({
+                    language: 'hi-IN',
+                    maxResults: 1,
+                    partialResults: false,
+                    popup: false
+                });
+                if (res && res.matches && res.matches.length) nativeHandleTranscript(res.matches[0]);
+            } catch (e) {
+                // cancel / kuch sunai nahi diya — normal hai, agla session schedule ho jayega
+                console.warn('native start result:', e);
+            }
+        }
+
+        function nativeStop() {
+            try { window.Capacitor.Plugins.SpeechRecognition.stop(); } catch (e) {}
+        }
+
+        /* ================= 14. SPEECH-TO-TEXT (Continuous conversation mode) ================= */
+        const SpeechRecognition = (IS_NATIVE_APP) ? null : (window.SpeechRecognition || window.webkitSpeechRecognition); // native APK me browser STT band
+        let recognition;
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = false;
+            recognition.lang = 'hi-IN'; // Hindi + Hinglish dono pakdega
+
+            recognition.onstart = () => {
+                isListening = true;
+                talkBtn.classList.add('active');
+                talkBtn.innerText = "Listening...";
+                logActivity('🎤 Mic on — sun raha hai...', 'system');
+            };
+
+            recognition.onresult = async (event) => {
+                const last = event.results[event.results.length - 1];
+                if (!last.isFinal) return;
+                const userSpeech = safeStr(last[0].transcript).trim();
+                if (!userSpeech) return;
+
+                // Self-voice feedback protection: jab TTS bol raha hai tab sirf interrupt-keywords process karo
+                if (isSpeaking) {
+                    if (/^(chup|shut up|bas kar|band kar|quiet|ruk|bas)/i.test(userSpeech)) {
+                        cancelSpeech();
+                        updateStatus("Theek hai, chup.");
+                        logActivity('🤫 User ne bolne ke dauran interrupt kiya.', 'user');
+                    }
+                    // baaki sab silently ignore — apni hi awaaz mic me leak ho sakti hai
+                    return;
+                }
+
+                // "Chup" interrupt — sirf bolna band, sunna chalu rahega
+                if (/^(chup|shut up|bas kar|band kar|quiet|ruk)/i.test(userSpeech)) {
+                    cancelSpeech();
+                    updateStatus("Theek hai, chup.");
+                    logActivity('🤫 User ne "chup" bola — Buddy ruk gaya.', 'user');
+                    return;
+                }
+
+                // Quick-unmute voice phrase — mute ke dauran turant hataao
+                if (muteMinutesRemaining > 0 && /\b(buddy\s*bol|wapas\s*aa\s*ja|unmute|bol\s*na|bol\s*yaar)\b/i.test(userSpeech)) {
+                    muteMinutesRemaining = 0;
+                    db.ref('buddy/system/muteUntil').set(0);
+                    mouth.classList.remove('muted-visual');
+                    renderMuteStatus();
+                    updateStatus("Wapas aa gaya!");
+                    logActivity('🔇 User ne quick-unmute bola.', 'user');
+                    return;
+                }
+
+                // Goodbye phrases — poori conversation band, mic bhi turant band (3-min wait nahi)
+                if (/\b(bye(\s*bye)?|good\s*bye|good\s*night|alvida|tata|chalta\s*hu(n)?|nikal(ta|te)?\s*(hu|hoon|hain)|so\s*(raha|jaa|jaata)\s*hu(n)?)\b/i.test(userSpeech)) {
+                    updateStatus(`You: ${userSpeech}`);
+                    pushHistory('user', userSpeech);
+                    logActivity('👋 User: ' + userSpeech.slice(0, 100), 'user');
+                    bumpInteractions();
+                    recordReply();
+                    logActivity('🔚 Conversation khatam — mic band ho gaya.', 'system');
+                    endConversation();
+                    enqueueCall(userSpeech + "\n[SYSTEM NOTE]: User ne baat khatam kar di (bye bola). Ek chhota warm farewell bolo — max 1 line, phir chup ho jao.", { isSystemOverride: true });
+                    return;
+                }
+
+                updateStatus(`You: ${userSpeech}`);
+                logActivity('🗣️ User bola: ' + userSpeech.slice(0, 100), 'user');
+                pushHistory('user', userSpeech);
+                bumpInteractions();
+                recordReply(); // preference learning: user replied
+                awaitingUserReply = false;
+                lastRealInteractionAt = Date.now(); // boredom clock reset — user abhi active hai
+                buddyMood = Math.max(0, buddyMood - 40); // dhyan mil gaya, restlessness kam ho gayi
+                saveAiState();
+
+
+
+                // Enter/refresh conversation mode
+                enterConversationMode();
+
+                // Instant request? bypass queue priority
+                // Photo yahan kabhi upfront nahi li jaati — AI khud decide karega (request_photo
+                // field se) agar sawal ka jawab dene ke liye dekhna zaroori hai. Poora camera
+                // control AI ke paas hai, keyword-matching pe nahi.
+                enqueueCall(userSpeech, { isSystemOverride: isInstantRequest(userSpeech) });
+            };
+
+            recognition.onerror = (e) => {
+                // 'no-speech' is expected/normal in continuous mode — silently ignore, no log spam
+                if (e.error === 'no-speech' || e.error === 'aborted') return;
+                console.warn("STT error:", e.error);
+                if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+                    conversationActive = false;
+                    updateStatus("Mic permission nahi mili.");
+                }
+                logActivity('⚠️ Mic error: ' + safeStr(e.error), 'error');
+            };
+
+            recognition.onend = () => {
+                isListening = false;
+                if (conversationActive && !isSpeaking && muteMinutesRemaining === 0) {
+                    // keep the conversation alive
+                    scheduleMicResume(300);
+                } else {
+                    talkBtn.classList.remove('active');
+                    talkBtn.innerText = "🎤 Speak";
+                }
+            };
+        }
+
+        let micResumeTimer = null;
+        function scheduleMicResume(delay) {
+            clearTimeout(micResumeTimer);
+            micResumeTimer = setTimeout(() => {
+                if (conversationActive && !isListening && !isSpeaking && !isProcessing) {
+                    if (IS_NATIVE_APP) { nativeStart(); } // native: naya listening session
+                    else if (recognition) { try { recognition.start(); } catch (e) { /* already started */ } }
+                }
+            }, delay);
+        }
+
+        function enterConversationMode() {
+            stopIdleFun(); // real conversation shuru — idle-fun band
+            conversationActive = true;
+            observationIntervalTime = 600000; // 10 min — pehle 1 min tha, background checks conversation ke saath quota nahi khaayenge ab
+            startObservationLoop();
+            clearTimeout(activeChatTimeout);
+            clearTimeout(conversationSilenceTimer);
+            conversationSilenceTimer = setTimeout(() => {
+                // 3 min silence → conversation mode off, back to 5-min observation
+                if (awaitingUserReply) recordIgnore();
+                endConversation();
+            }, 180000);
+        }
+
+        // Turant conversation band karo — "bye" bolne pe ya 3-min silence pe. Mic band, timers clear.
+        function endConversation() {
+            conversationActive = false;
+            clearTimeout(conversationSilenceTimer);
+            clearTimeout(micResumeTimer);
+            try { if (IS_NATIVE_APP) { nativeStop(); } else if (recognition && isListening) recognition.stop(); } catch (e) {}
+            talkBtn.classList.remove('active');
+            talkBtn.innerText = "🎤 Speak";
+            observationIntervalTime = 300000;
+            startObservationLoop();
+            awaitingUserReply = false;
+            scheduleIdleFun(); // conversation khatam — ab idle-fun (zero API) shuru
+        }
+
+        async function startListening() {
+            if (muteMinutesRemaining > 0) { updateStatus(`Muted for ${muteMinutesRemaining} more mins.`); return; }
+            if (isSleeping) { isSleeping = false; setExpression('surprised'); }
+            if (IS_NATIVE_APP) {
+                if (!nativeSttReady) await nativeSttInit();
+                if (!nativeSttAvailable) { updateStatus("Is phone me voice input support nahi hai."); logActivity('\u26A0\uFE0F Native speech recognition available nahi hai.', 'error'); return; }
+                enterConversationMode();
+                if (!isListening) { cancelSpeech(); nativeStart(); }
+                return;
+            }
+            if (!recognition) { updateStatus("Browser speech support nahi hai."); logActivity('\u26A0\uFE0F Is browser/APK mein voice input support nahi hai.', 'error'); return; }
+            enterConversationMode();
+            if (!isListening) {
+                cancelSpeech();
+                try { recognition.start(); } catch (e) { /* already running */ }
+            }
+        }
+
+        /* ================= 15. PREFERENCE LEARNING (replies vs ignores) ================= */
+        function recordReply() {
+            const k = todayKey();
+            if (!interactionStats[k]) interactionStats[k] = { replies: 0, ignores: 0 };
+            interactionStats[k].replies = (interactionStats[k].replies || 0) + 1;
+            db.ref('buddy/interactionStats/' + k).set(interactionStats[k]);
+        }
+        function recordIgnore() {
+            const k = todayKey();
+            if (!interactionStats[k]) interactionStats[k] = { replies: 0, ignores: 0 };
+            interactionStats[k].ignores = (interactionStats[k].ignores || 0) + 1;
+            db.ref('buddy/interactionStats/' + k).set(interactionStats[k]);
+        }
+
+        /* ================= 16. UI & STARTUP LOGIC ================= */
+        const VALID_EXPRESSIONS = ['normal', 'happy', 'angry', 'sad', 'thinking', 'sleeping', 'surprised',
+            'bored', 'confused', 'laughing', 'smirk', 'shy', 'annoyed', 'curious', 'love', 'winking', 'sleepy',
+            'excited', 'dizzy', 'cool', 'crying', 'proud', 'nervous', 'sneaky', 'starstruck', 'sassy',
+            'determined', 'relaxed', 'grumpy', 'zoned', 'whistling', 'glitch'];
+        let expressionFadeTimer = null;
+        function setExpression(expr) {
+            const target = VALID_EXPRESSIONS.includes(expr) ? expr : 'normal';
+            const newClass = `face expr-${target}`;
+            if (face.className === newClass) return; // already showing this, skip re-trigger
+            // Soft crossfade instead of an instant class-swap snap.
+            clearTimeout(expressionFadeTimer);
+            face.classList.add('expr-fade');
+            expressionFadeTimer = setTimeout(() => {
+                face.className = newClass;
+                requestAnimationFrame(() => face.classList.remove('expr-fade'));
+            }, 90);
+        }
+
+        // Blink loop
+        setInterval(() => {
+            if (isSleeping) return;
+            face.classList.add('blink');
+            setTimeout(() => face.classList.remove('blink'), 150);
+        }, Math.random() * 3000 + 2000);
+
+        function tapToWake() {
+            // Triple-tap secret gesture always tracked (chahe soye ho ya jaage ho)
+            handleFaceTap();
+            if (isSleeping) {
+                isSleeping = false;
+                lastRealInteractionAt = Date.now();
+                buddyMood = Math.max(0, buddyMood - 25);
+                saveAiState();
+                setExpression('surprised');
+                enqueueCall("User ne tumhe screen par tap karke jagaya hai. Kuch funny bolo — morning voice wali vibe (thodi kharash wali sleepy tone ka text).");
+            }
+        }
+
+        function initSystem() {
+            document.getElementById('start-screen').style.display = 'none';
+            logActivity('🔌 Buddy start hua.', 'system');
+            window.speechSynthesis.speak(new SpeechSynthesisUtterance("")); // unlock browser TTS (fallback path)
+            try { getTtsAudioCtx().resume(); } catch (e) {} // unlock Gemini TTS audio (autoplay policy)
+            try { nativeSttInit(); } catch (e) {} // Android APK: native mic + camera permission yahin se shuru
+            if (window.speechSynthesis.onvoiceschanged !== undefined) {
+                window.speechSynthesis.onvoiceschanged = () => pickVoice();
+            }
+
+            db.ref('buddy/last_offline').once('value').then(async (snap) => {
+                const lastTime = snap.val();
+                let promptText = "Hello bolo. Main abhi online aaya hu.";
+                if (lastTime) {
+                    const diffHours = Math.floor((Date.now() - lastTime) / (1000 * 60 * 60));
+                    if (diffHours >= 1) {
+                        promptText = `Main ${diffHours} ghante baad wapas aaya hu. Is dauran mujhe kya miss hua hoga — agar kuch pata nahi toh mujhse puch sakte ho ("Itni der kahan the?"). Photo dekh kar bhi comment karo.`;
+                    }
+                }
+                const photo = await takeSnapshot();
+                enqueueCall(promptText, { base64Image: photo, isSystemOverride: true });
+                startObservationLoop();
+            });
+
+            window.addEventListener('beforeunload', () => {
+                db.ref('buddy/last_offline').set(Date.now());
+                if (awaitingUserReply) recordIgnore();
+            });
+        }
+
+        // Warm up voices (some browsers load async)
+        if ('speechSynthesis' in window) window.speechSynthesis.getVoices();
+    </script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v31edd6df95cf4e85bb4c19e7a9bdbcba1788362987495" integrity="sha512-iIg7k2xntmwu6/uSb5tpc/hySgZc4eoL31yB29W6tJFo2akwjPWcEqnCEdJvGexCL0KEQwVYv5BlowfhVz26hg==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","spa":2}' crossorigin="anonymous"></script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v31edd6df95cf4e85bb4c19e7a9bdbcba1788362987495" integrity="sha512-iIg7k2xntmwu6/uSb5tpc/hySgZc4eoL31yB29W6tJFo2akwjPWcEqnCEdJvGexCL0KEQwVYv5BlowfhVz26hg==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","spa":2}' crossorigin="anonymous"></script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v31edd6df95cf4e85bb4c19e7a9bdbcba1788362987495" integrity="sha512-iIg7k2xntmwu6/uSb5tpc/hySgZc4eoL31yB29W6tJFo2akwjPWcEqnCEdJvGexCL0KEQwVYv5BlowfhVz26hg==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","spa":2}' crossorigin="anonymous"></script>
+</body>
+</html>
